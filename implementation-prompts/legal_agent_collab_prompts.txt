@@ -1,0 +1,63 @@
+Prompt 1: Repo Integration Setup
+"I already have an app named Legal Agent with React frontend and Python (FastAPI) backend using Redis + Postgres. 
+Add a new module for real-time collaborative editing with OT first (and CRDT later). 
+Set up /collab/ folder in backend for WebSocket handlers and OT logic, and extend frontend with /collab/ components."
+
+Prompt 2: WebSocket + OT integration (FastAPI backend)
+"In /backend/collab, create a FastAPI WebSocket endpoint `/ws/docs/{doc_id}`. 
+Use Redis pub/sub for broadcasting operations. Implement OT logic in Python to transform operations before broadcasting. 
+Persist operations into Postgres `updates` table. Authenticate WebSocket connections with existing JWT middleware."
+
+Prompt 3: Editor UI (React frontend)
+"In /frontend/collab, create a new React editor component using Tiptap. 
+Implement an OT SyncProvider in TypeScript that connects to the FastAPI WebSocket endpoint `/ws/docs/:id`. 
+Support real-time collaborative editing for plain text initially."
+
+Prompt 4: Comments Feature
+"Extend the editor to support comments. Each comment has anchor {nodeId, offset}. 
+Add REST endpoints in FastAPI `/api/docs/{doc_id}/comments` to store and fetch comments from Postgres. 
+Display comments inline and in a sidebar in the React client."
+
+Prompt 5: Suggestions / Tracked Changes
+"Extend the Tiptap schema to support `insertion` and `deletion` marks. 
+When suggestion mode is enabled, edits should create marks instead of normal text. 
+Add accept/reject buttons in the UI and handle accept/reject via REST API in FastAPI that updates document state and logs the action."
+
+Prompt 6: Version History
+"Implement version history in backend. Add a `snapshots` table in Postgres. 
+Every N operations or on demand, persist a snapshot of the document. 
+Expose `/api/docs/{doc_id}/versions` to list versions and `/api/docs/{doc_id}/restore/{version_id}` to restore. 
+In frontend, add a Version History modal to view and restore snapshots."
+
+Prompt 7: Presence & Cursors
+"Add presence tracking using Redis pub/sub. Broadcast active user cursors and selections. 
+In frontend, display colored cursors and avatars for active users."
+
+Prompt 8: Integration Tests
+"Write integration tests for FastAPI backend using pytest and httpx. 
+Simulate multiple WebSocket clients editing the same document concurrently. Verify final document state convergence."
+
+Prompt 9: Security & Permissions
+"Integrate with Legal Agent's existing RBAC system. Define roles: viewer, commenter, editor, admin. 
+Enforce role checks in WebSocket endpoint and REST APIs. Add tests verifying permissions."
+
+Prompt 10: CRDT SyncProvider (future-proofing)
+"Implement a CRDT provider using Yjs. Add a WebSocket endpoint `/ws-crdt/docs/{doc_id}` in FastAPI that integrates with y-py (Python binding for Yjs). 
+Persist CRDT updates to Postgres `updates` table. Add a feature flag `sync_mode: 'ot' | 'crdt'` in documents table."
+
+Prompt 11: Migration Tool (OT → CRDT)
+"Write a Python script in /backend/tools/migrate.py that replays OT operations from the updates table into a Yjs document (using y-py). 
+Save the CRDT snapshot into Postgres. Verify content matches the latest OT snapshot."
+
+Prompt 12: Monitoring & Metrics
+"Add Prometheus instrumentation to FastAPI backend. Track WebSocket latency, operations/sec, Redis pub/sub delays, snapshot times. 
+Expose /metrics endpoint for scraping. Configure alerts for failed snapshots or high latency."
+
+Prompt 13: Deployment
+"Update docker-compose.yml to include Redis (already present), Postgres, backend with FastAPI collab service, and frontend. 
+Ensure collab features run alongside existing Legal Agent features with no conflicts."
+
+Prompt 14: End-to-End Tests
+"Add Cypress tests for the frontend collaborative editor: multiple simulated users editing the same doc, adding comments, tracked changes, and restoring versions. 
+Verify real-time synchronization and UI updates."
+

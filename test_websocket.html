@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h1>WebSocket Test</h1>
+    <div id="messages"></div>
+    <input type="text" id="messageInput" placeholder="Type a message">
+    <button onclick="sendMessage()">Send</button>
+    
+    <script>
+        const ws = new WebSocket('ws://localhost:8000/collab/test');
+        const messages = document.getElementById('messages');
+        
+        ws.onopen = function(event) {
+            addMessage('Connected to WebSocket');
+        };
+        
+        ws.onmessage = function(event) {
+            addMessage('Received: ' + event.data);
+        };
+        
+        ws.onclose = function(event) {
+            addMessage('WebSocket closed: ' + event.code + ' ' + event.reason);
+        };
+        
+        ws.onerror = function(error) {
+            addMessage('WebSocket error: ' + error);
+        };
+        
+        function addMessage(message) {
+            const div = document.createElement('div');
+            div.textContent = message;
+            messages.appendChild(div);
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            ws.send(input.value);
+            input.value = '';
+        }
+    </script>
+</body>
+</html>

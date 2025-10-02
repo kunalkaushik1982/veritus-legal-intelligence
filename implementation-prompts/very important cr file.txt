@@ -1,0 +1,52 @@
+Prompt 1: Repo Scaffolding
+"Generate a new monorepo with /client (React + Vite + Tiptap), /server (Node.js + ShareDB + WebSocket), and docker-compose.yml for Postgres. 
+Include a README with setup instructions. Use TypeScript in both client and server."
+
+Prompt 2: WebSocket + OT integration (server)
+"In /server, set up a WebSocket server using ShareDB. Create a `doc` collection where each client can connect to a document ID. 
+Persist updates into Postgres with an append-only `updates` table. Use JWT auth for connections."
+
+Prompt 3: Editor UI (client)
+"In /client, create a React app using Tiptap. Add an OT SyncProvider that connects to /server WebSocket. 
+Show live collaborative editing for plain text documents."
+
+Prompt 4: Comments Feature
+"Add a comments sidebar to the client editor. Each comment should have anchor {nodeId, offset}. 
+Create REST endpoints in /server `/api/docs/:id/comments` to store comments in Postgres. 
+Display comments inline in the editor and in a sidebar panel."
+
+Prompt 5: Suggestions / Tracked Changes
+"Extend the Tiptap schema to support `insertion` and `deletion` marks. 
+When suggestion mode is on, local edits should produce marked text instead of normal text. 
+Add accept/reject buttons in the UI to accept or reject suggestions. 
+On accept/reject, send the appropriate step through OT sync."
+
+Prompt 6: Version History
+"Implement version history in /server. Add a `snapshots` table in Postgres and periodically create snapshots of documents. 
+Expose REST API `/api/docs/:id/versions` to list snapshots and `/api/docs/:id/restore/:versionId` to restore a snapshot. 
+Add a simple UI in /client to browse and restore versions."
+
+Prompt 7: Presence & Cursors
+"Add presence support. Broadcast user cursors and active selections via WebSocket. 
+Show colored cursors and user avatars in the editor when multiple users are active."
+
+Prompt 8: Integration Tests
+"Write Jest integration tests in /server/tests that spawn 3 WebSocket clients connected to the same document. 
+Each applies edits concurrently. Verify final document state converges to the same for all clients."
+
+Prompt 9: Security & Permissions
+"Implement role-based access control for documents. Define roles: viewer, commenter, editor, admin. 
+Enforce permissions at the server level for WebSocket and REST endpoints. 
+Write tests to verify permissions are enforced."
+
+Prompt 10: CRDT SyncProvider (future-proofing)
+"Add a new SyncProvider implementation using Yjs in /client. Use `y-websocket` provider for sync and persist updates to the same `updates` table. 
+Expose a feature flag in document metadata (`sync_mode: 'ot' | 'crdt'`). Allow toggling between OT and CRDT providers per document."
+
+Prompt 11: Migration Tool (OT → CRDT)
+"Implement a migration script in /server/tools/migrate.ts that replays OT updates from the `updates` table onto a Yjs doc, 
+producing an initial CRDT state. Store the CRDT snapshot in Postgres. Verify content hashes match OT snapshot content."
+
+Prompt 12: Monitoring & Metrics
+"Add Prometheus metrics to /server for: sync latency, updates/sec, number of active clients, size of update log. 
+Expose metrics on /metrics endpoint. Add alerts for snapshot failures or high latency."
