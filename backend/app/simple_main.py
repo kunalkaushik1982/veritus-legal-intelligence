@@ -22,10 +22,29 @@ from app.models.citation import Citation, CitationType
 
 app = FastAPI(title="Veritus API", version="1.0.0")
 
-# CORS middleware
+# CORS middleware - Updated for production deployment
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # Vercel deployment domains
+    "https://veritus-legal-intelligence.vercel.app",
+    "https://veritus-legal-intelligence-*.vercel.app",  # Preview deployments
+    # Add your custom domain here if you have one
+    # "https://your-custom-domain.com",
+]
+
+# Add ngrok URLs from environment variable if available
+ngrok_url = os.getenv("NGROK_URL")
+if ngrok_url:
+    allowed_origins.extend([
+        ngrok_url,
+        ngrok_url.replace("https://", "wss://"),  # WebSocket URL
+        ngrok_url.replace("http://", "ws://")     # WebSocket URL for HTTP
+    ])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
