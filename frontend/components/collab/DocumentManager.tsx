@@ -13,6 +13,7 @@ import {
   Filter
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import API_CONFIG from '../../utils/config';
 
 interface Document {
   id: string;
@@ -42,7 +43,7 @@ const DocumentManager: React.FC<DocumentManagerProps> = ({
   const loadDocuments = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/collab/documents');
+      const response = await fetch(API_CONFIG.getApiUrl('/collab/documents'));
       const result = await response.json();
       
       if (result.success) {
@@ -67,7 +68,7 @@ const DocumentManager: React.FC<DocumentManagerProps> = ({
 
     setIsCreating(true);
     try {
-      const response = await fetch('http://localhost:8000/collab/documents', {
+      const response = await fetch(API_CONFIG.getApiUrl('/collab/documents'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -104,7 +105,7 @@ const DocumentManager: React.FC<DocumentManagerProps> = ({
     }
 
     try {
-      const response = await fetch(`http://localhost:8000/collab/documents/${documentId}`, {
+      const response = await fetch(API_CONFIG.getApiUrl(`/collab/documents/${documentId}`), {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',

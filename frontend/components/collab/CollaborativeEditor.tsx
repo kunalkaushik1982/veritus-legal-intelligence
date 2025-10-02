@@ -21,6 +21,7 @@ import CommentsSidebar from './CommentsSidebar';
 import CursorOverlay from './CursorOverlay';
 import SimpleCursorOverlay from './SimpleCursorOverlay';
 import DebugCursorOverlay from './DebugCursorOverlay';
+import API_CONFIG from '../../utils/config';
 
 interface CollaborativeEditorProps {
   documentId: string;
@@ -103,7 +104,7 @@ const CollaborativeEditor: React.FC<CollaborativeEditorProps> = ({
     const currentAttempt = connectionAttemptRef.current;
     
     setIsConnecting(true);
-    const wsUrl = `ws://localhost:8000/collab/ws/docs/${documentId}`;
+    const wsUrl = API_CONFIG.getWsUrl(`/collab/ws/docs/${documentId}`);
     
     console.log(`🔌 Connection attempt ${currentAttempt} for document ${documentId}`);
     console.log(`🌐 WebSocket URL: ${wsUrl}`);
@@ -279,7 +280,7 @@ const CollaborativeEditor: React.FC<CollaborativeEditorProps> = ({
   // Load document content
   const loadDocumentContent = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/collab/documents/${documentId}/state`);
+      const response = await fetch(API_CONFIG.getApiUrl(`/collab/documents/${documentId}/state`));
       const result = await response.json();
       
       if (result.success && result.document) {
@@ -302,7 +303,7 @@ const CollaborativeEditor: React.FC<CollaborativeEditorProps> = ({
 
     setIsSaving(true);
     try {
-      const response = await fetch(`http://localhost:8000/collab/documents/${documentId}/save`, {
+      const response = await fetch(API_CONFIG.getApiUrl(`/collab/documents/${documentId}/save`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

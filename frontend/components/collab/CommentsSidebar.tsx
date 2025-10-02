@@ -11,6 +11,7 @@ import {
   User,
   Clock
 } from 'lucide-react';
+import API_CONFIG from '../../utils/config';
 import toast from 'react-hot-toast';
 
 interface Comment {
@@ -61,7 +62,7 @@ const CommentsSidebar: React.FC<CommentsSidebarProps> = ({
   const loadComments = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`http://localhost:8000/collab/documents/${documentId}/comments`);
+      const response = await fetch(API_CONFIG.getApiUrl(`/collab/documents/${documentId}/comments`));
       const result = await response.json();
       
       if (result.success) {
@@ -81,7 +82,7 @@ const CommentsSidebar: React.FC<CommentsSidebarProps> = ({
     if (!newComment.trim() || selectedPosition === undefined) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/collab/documents/${documentId}/comments`, {
+      const response = await fetch(API_CONFIG.getApiUrl(`/collab/documents/${documentId}/comments`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
