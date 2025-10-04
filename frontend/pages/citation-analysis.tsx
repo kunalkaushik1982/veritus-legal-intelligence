@@ -18,6 +18,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import API_CONFIG from '../utils/config';
 
 interface CitationAnalysis {
   citation_type: string;
@@ -29,6 +30,7 @@ interface CitationAnalysis {
   is_positive: boolean;
   context: string;
   analysis_timestamp: string;
+  pdf_analysis?: any; // Optional PDF analysis data
 }
 
 interface NetworkNode {
@@ -59,6 +61,8 @@ interface CitationNetwork {
     avg_citation_strength: number;
   };
   total_citations: number;
+  is_sample_data?: boolean; // Optional sample data indicator
+  target_file?: string; // Optional target file name
 }
 
 interface PrecedentRanking {
@@ -127,7 +131,7 @@ export default function CitationAnalysis() {
   const loadJudgments = async () => {
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch('http://localhost:8000/api/judgments/', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/judgments/'), {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -158,7 +162,7 @@ export default function CitationAnalysis() {
       formData.append('file', uploadFile);
 
       const token = localStorage.getItem('access_token');
-      const response = await fetch('http://localhost:8000/api/upload/pdf', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/upload/pdf'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -198,7 +202,7 @@ export default function CitationAnalysis() {
       const sourceId = selectedSource?.id || analysisForm.source_judgment_id;
       const targetId = selectedTarget?.id || analysisForm.target_judgment_id;
 
-      const response = await fetch('http://localhost:8000/api/citations/analyze', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/citations/analyze'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -228,7 +232,7 @@ export default function CitationAnalysis() {
   const getCitationNetwork = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/citations/network/${networkJudgmentId}`);
+      const response = await fetch(API_CONFIG.getApiUrl(`/api/citations/network/${networkJudgmentId}`));
       
       if (!response.ok) {
         throw new Error('Network analysis failed');
@@ -248,7 +252,7 @@ export default function CitationAnalysis() {
   const getPrecedentRanking = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/citations/strength-ranking?limit=${rankingLimit}`);
+      const response = await fetch(API_CONFIG.getApiUrl(`/api/citations/strength-ranking?limit=${rankingLimit}`));
       
       if (!response.ok) {
         throw new Error('Ranking failed');
@@ -781,7 +785,7 @@ export default function CitationAnalysis() {
                     ) : (
                       <div className="text-center text-gray-500 py-8">
                         <Search className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                        <p>Enter citation details and click "Analyze Citation" to see results</p>
+                        <p>Enter citation details and click &quot;Analyze Citation&quot; to see results</p>
                       </div>
                     )}
                   </div>
@@ -884,7 +888,7 @@ export default function CitationAnalysis() {
                     ) : (
                       <div className="text-center text-gray-500 py-8">
                         <Network className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                        <p>Enter a judgment ID and click "Load Network" to see the citation network</p>
+                        <p>Enter a judgment ID and click &quot;Load Network&quot; to see the citation network</p>
                       </div>
                     )}
                   </div>
@@ -1011,7 +1015,7 @@ export default function CitationAnalysis() {
                     ) : (
                       <div className="text-center text-gray-500 py-8">
                         <Award className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                        <p>Click "Load Ranking" to see the most influential precedents</p>
+                        <p>Click &quot;Load Ranking&quot; to see the most influential precedents</p>
                       </div>
                     )}
                   </div>

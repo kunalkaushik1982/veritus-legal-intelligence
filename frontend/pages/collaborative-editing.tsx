@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { ArrowLeft, User, Settings, LogOut } from 'lucide-react';

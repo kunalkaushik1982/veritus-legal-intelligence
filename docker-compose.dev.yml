@@ -1,0 +1,25 @@
+# Development override for docker-compose.yml
+# This file extends the main docker-compose.yml for development
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  backend:
+    # Override volumes for development - mount source code for hot reload
+    volumes:
+      - ./backend:/app
+      - ./pdfs:/app/pdfs
+    # Ensure reload is enabled
+    command: uvicorn app.simple_main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - DATABASE_URL=postgresql://veritus_user:veritus_password@postgres:5432/veritus
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=True
+      - CORS_ORIGINS=http://localhost:3000
+      - OPENAI_API_KEY=your_openai_api_key_here
+
+  # Remove frontend service for development - we'll run it locally
+  frontend:
+    profiles:
+      - production  # Only run frontend in production profile

@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from openai import OpenAI
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+from fastapi import Response as FastAPIResponse
 import os
 import json
 import time
@@ -11,14 +13,15 @@ from datetime import datetime
 from pathlib import Path
 from app.api.batch_processing import router as batch_router
 from app.collab.routes import router as collab_router
-from app.services.rag_service import RAGService
 from app.services.citation_analyzer import CitationAnalyzer
 from app.services.pdf_processor import PDFProcessor
 from app.services.pdf_metadata_extractor import PDFMetadataExtractor
 from app.services.judgment_storage import JudgmentMetadataStorage
 from app.services.timeline_extractor import TimelineExtractor
 from app.services.case_summarizer import CaseSummarizer
+from app.services.ai_service import AIService
 from app.models.citation import Citation, CitationType
+from sample_data import get_sample_judgments, get_sample_citations, get_judgment_by_id
 
 app = FastAPI(title="Veritus API", version="1.0.0")
 
@@ -29,12 +32,22 @@ allowed_origins = [
     # Vercel deployment domains
     "https://veritus-legal-intelligence.vercel.app",
     "https://veritus-legal-intelligence-*.vercel.app",  # Preview deployments
+    "https://frontend-b4znvkwqa-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-3mno3z5zj-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-50lzfjssd-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-1h6cdn3sj-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-mf62ymet4-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-q2e4qhvcb-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-qmd5askvl-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-fpr5rlb5d-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Previous deployment
+    "https://frontend-ngaj3le2b-kunal-kaushiks-projects-23f7fe2e.vercel.app",  # Current deployment
+    "https://frontend-*.vercel.app",  # All frontend deployments
     # Add your custom domain here if you have one
     # "https://your-custom-domain.com",
 ]
 
 # Add ngrok URLs from environment variable if available
-ngrok_url = os.getenv("NGROK_URL")
+ngrok_url = os.getenv("NGROK_URL", "https://94dc58a98917.ngrok-free.app")
 if ngrok_url:
     allowed_origins.extend([
         ngrok_url,
@@ -42,23 +55,26 @@ if ngrok_url:
         ngrok_url.replace("http://", "ws://")     # WebSocket URL for HTTP
     ])
 
+# Add standard FastAPI CORS middleware
+print("🔧 Adding CORS middleware with allow_origins=['*']")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,  # Must be False when using allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )
+print("✅ CORS middleware added successfully")
 
 # Include routers
 app.include_router(batch_router)
 app.include_router(collab_router)
 
 # Initialize services
-rag_service = RAGService()
 pdf_processor = PDFProcessor()
 metadata_extractor = PDFMetadataExtractor()
 judgment_storage = JudgmentMetadataStorage()
+
 timeline_extractor = TimelineExtractor()
 case_summarizer = CaseSummarizer()
 
@@ -72,11 +88,54 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "veritus-backend"}
+    return {"status": "healthy", "service": "veritus-backend", "version": "dev-1.0"}
+
+# Add OPTIONS handlers for auth endpoints
+@app.options("/api/auth/login")
+async def login_options():
+    return Response(
+        content="",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "86400"
+        }
+    )
+
+@app.options("/api/auth/register")
+async def register_options():
+    return Response(
+        content="",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "86400"
+        }
+    )
 
 @app.get("/api/test")
 async def test():
-    return {"message": "Test endpoint working"}
+    return JSONResponse(
+        content={"message": "Test endpoint working"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+@app.options("/api/test")
+async def test_options():
+    return Response(
+        content="OPTIONS working",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
 
 @app.post("/api/auth/register")
 async def register():
@@ -94,7 +153,7 @@ async def register():
     }
 
 @app.post("/api/auth/login")
-async def login(request: Request):
+async def login(request: Request, response: FastAPIResponse):
     # Get username from request body
     body = await request.body()
     username = "User"  # Default fallback
@@ -113,86 +172,27 @@ async def login(request: Request):
     import hashlib
     user_id = int(hashlib.md5(username.encode()).hexdigest()[:8], 16)
     
-    return {
-        "access_token": f"demo_token_{user_id}",
-        "token_type": "bearer",
-        "user": {
-            "id": user_id,
-            "email": f"{username}@veritus.com",
-            "full_name": username,
-            "subscription_tier": "pro",
-            "queries_today": 0,
-            "total_queries": 0
-        }
-    }
-
-@app.post("/api/chatbot/query")
-async def chatbot_query(request: Request):
-    try:
-        start_time = time.time()
-        
-        # Get request body
-        body = await request.body()
-        data = json.loads(body.decode('utf-8'))
-        query = data.get('query', '')
-        
-        # Check if OpenAI API key is configured
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            return {
-                "response": "OpenAI API key not configured. Please add your API key to the .env file.",
-                "citations": [],
-                "relevant_judgments": [],
-                "confidence_score": 0,
-                "response_time_ms": 0,
-                "tokens_used": 0,
-                "query_intent": "error",
-                "context_used": False
+    # Return JSONResponse with explicit CORS headers
+    return JSONResponse(
+        content={
+            "access_token": f"demo_token_{user_id}",
+            "token_type": "bearer",
+            "user": {
+                "id": user_id,
+                "email": f"{username}@veritus.com",
+                "full_name": username,
+                "subscription_tier": "pro",
+                "queries_today": 0,
+                "total_queries": 0
             }
-        
-        # Use RAG service for query
-        result = await rag_service.query_with_rag(query)
-        
-        # Calculate response time
-        response_time_ms = int((time.time() - start_time) * 1000)
-        result["response_time_ms"] = response_time_ms
-        
-        return result
-        
-    except Exception as e:
-        return {
-            "response": f"Error processing query: {str(e)}",
-            "citations": [],
-            "relevant_judgments": [],
-            "confidence_score": 0,
-            "response_time_ms": 0,
-            "tokens_used": 0,
-            "query_intent": "error",
-            "context_used": False
+        },
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
         }
+    )
 
-@app.post("/api/rag/load-judgments")
-async def load_judgments():
-    """Load sample judgments into the RAG knowledge base"""
-    try:
-        result = await rag_service.load_sample_judgments("/app/pdfs", limit=3)
-        return result
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@app.get("/api/rag/status")
-async def get_rag_status():
-    """Get RAG knowledge base status"""
-    try:
-        status = await rag_service.get_knowledge_base_status()
-        return status
-    except Exception as e:
-        return {
-            "error": str(e)
-        }
 
 @app.post("/api/upload/pdf")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -301,94 +301,109 @@ async def list_judgments():
         # Fallback to stored metadata
         stored_judgments = judgment_storage.get_all_judgments()
         
-        if not stored_judgments:
-            # Fallback to basic file listing if no metadata exists
-            pdfs_dir = Path("pdfs")
-            if not pdfs_dir.exists():
-                return {"judgments": []}
-            
-            judgments = []
-            pdf_files = list(pdfs_dir.glob("*.pdf"))
-            
-            for i, pdf_file in enumerate(pdf_files, 1):
-                filename = pdf_file.stem
-                judgments.append({
-                    "id": i,
-                    "case_title": filename.replace('_', ' ').replace('-', ' '),
-                    "case_number": filename,
-                    "petitioner": "Unknown Petitioner",
-                    "respondent": "Unknown Respondent",
-                    "judgment_date": None,
-                    "summary": f"Uploaded PDF: {filename}",
-                    "court": "Supreme Court",
-                    "judges": [],
-                    "is_processed": True,
-                    "filename": pdf_file.name,
-                    "extraction_status": "pending"
-                })
-            
-            return {"judgments": judgments}
+        if stored_judgments:
+            return {"judgments": stored_judgments}
         
-        # Return stored metadata
-        return {"judgments": stored_judgments}
+        # Check for local PDFs
+        pdfs_dir = Path("pdfs")
+        if pdfs_dir.exists():
+            pdf_files = list(pdfs_dir.glob("*.pdf"))
+            if pdf_files:
+                judgments = []
+                for i, pdf_file in enumerate(pdf_files, 1):
+                    filename = pdf_file.stem
+                    judgments.append({
+                        "id": i,
+                        "case_title": filename.replace('_', ' ').replace('-', ' '),
+                        "case_number": filename,
+                        "petitioner": "Unknown Petitioner",
+                        "respondent": "Unknown Respondent",
+                        "judgment_date": None,
+                        "summary": f"Uploaded PDF: {filename}",
+                        "court": "Supreme Court",
+                        "judges": [],
+                        "is_processed": True,
+                        "filename": pdf_file.name,
+                        "extraction_status": "pending"
+                    })
+                return {"judgments": judgments}
+        
+        # Final fallback: return sample data for external access
+        print("No local data found, returning sample judgments for external access")
+        sample_judgments = get_sample_judgments()
+        return {"judgments": sample_judgments}
         
     except Exception as e:
-        return {"judgments": [], "error": str(e)}
+        print(f"Error in list_judgments: {e}")
+        # Return sample data on error for external access
+        sample_judgments = get_sample_judgments()
+        return {"judgments": sample_judgments}
 
 @app.get("/api/judgments/{judgment_id}/view")
 async def view_judgment(judgment_id: int):
     """View a specific judgment PDF"""
     try:
+        # First check for local PDFs
         pdfs_dir = Path("pdfs")
-        if not pdfs_dir.exists():
-            raise HTTPException(status_code=404, detail="PDFs directory not found")
+        if pdfs_dir.exists():
+            pdf_files = list(pdfs_dir.glob("*.pdf"))
+            if judgment_id >= 1 and judgment_id <= len(pdf_files):
+                pdf_file = pdf_files[judgment_id - 1]
+                if pdf_file.exists():
+                    return FileResponse(
+                        path=str(pdf_file),
+                        media_type="application/pdf",
+                        filename=pdf_file.name,
+                        headers={"Content-Disposition": f"inline; filename={pdf_file.name}"}
+                    )
         
-        pdf_files = list(pdfs_dir.glob("*.pdf"))
-        if judgment_id < 1 or judgment_id > len(pdf_files):
-            raise HTTPException(status_code=404, detail=f"Judgment {judgment_id} not found")
+        # Fallback for sample data - return judgment text as response
+        sample_judgment = get_judgment_by_id(judgment_id)
+        if sample_judgment:
+            return {
+                "success": True,
+                "message": "Sample judgment data (PDF not available for external access)",
+                "judgment": sample_judgment,
+                "note": "This is sample data. PDF viewing is only available for locally uploaded files."
+            }
         
-        pdf_file = pdf_files[judgment_id - 1]
-        
-        if not pdf_file.exists():
-            raise HTTPException(status_code=404, detail="PDF file not found")
-        
-        # Return the PDF file
-        return FileResponse(
-            path=str(pdf_file),
-            media_type="application/pdf",
-            filename=pdf_file.name,
-            headers={"Content-Disposition": f"inline; filename={pdf_file.name}"}
-        )
+        raise HTTPException(status_code=404, detail=f"Judgment {judgment_id} not found")
         
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error viewing PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error viewing judgment: {str(e)}")
 
 @app.get("/api/judgments/{judgment_id}/download")
 async def download_judgment(judgment_id: int):
     """Download a specific judgment PDF"""
     try:
+        # First check for local PDFs
         pdfs_dir = Path("pdfs")
-        if not pdfs_dir.exists():
-            raise HTTPException(status_code=404, detail="PDFs directory not found")
+        if pdfs_dir.exists():
+            pdf_files = list(pdfs_dir.glob("*.pdf"))
+            if judgment_id >= 1 and judgment_id <= len(pdf_files):
+                pdf_file = pdf_files[judgment_id - 1]
+                if pdf_file.exists():
+                    return FileResponse(
+                        path=str(pdf_file),
+                        media_type="application/pdf",
+                        filename=pdf_file.name,
+                        headers={"Content-Disposition": f"attachment; filename={pdf_file.name}"}
+                    )
         
-        pdf_files = list(pdfs_dir.glob("*.pdf"))
-        if judgment_id < 1 or judgment_id > len(pdf_files):
-            raise HTTPException(status_code=404, detail=f"Judgment {judgment_id} not found")
+        # Fallback for sample data - return judgment text as JSON
+        sample_judgment = get_judgment_by_id(judgment_id)
+        if sample_judgment:
+            return {
+                "success": True,
+                "message": "Sample judgment data (PDF download not available for external access)",
+                "judgment": sample_judgment,
+                "note": "This is sample data. PDF download is only available for locally uploaded files.",
+                "download_format": "json"
+            }
         
-        pdf_file = pdf_files[judgment_id - 1]
-        
-        if not pdf_file.exists():
-            raise HTTPException(status_code=404, detail="PDF file not found")
-        
-        # Return the PDF file for download
-        return FileResponse(
-            path=str(pdf_file),
-            media_type="application/pdf",
-            filename=pdf_file.name,
-            headers={"Content-Disposition": f"attachment; filename={pdf_file.name}"}
-        )
+        raise HTTPException(status_code=404, detail=f"Judgment {judgment_id} not found")
         
     except HTTPException:
         raise
@@ -464,6 +479,23 @@ async def process_existing_pdfs():
         raise HTTPException(status_code=500, detail=f"Error processing PDFs: {str(e)}")
 
 # Citation analysis endpoints
+@app.get("/api/citations/sample")
+async def get_sample_citations():
+    """Get sample citation data for external access"""
+    try:
+        sample_citations = get_sample_citations()
+        return {
+            "success": True,
+            "citations": sample_citations,
+            "note": "This is sample citation data for demonstration purposes."
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "citations": []
+        }
+
 @app.post("/api/citations/analyze")
 async def analyze_citation(request: Request):
     """Analyze citation relationship between two judgments"""
@@ -477,8 +509,10 @@ async def analyze_citation(request: Request):
         pdfs_dir = Path("pdfs")
         source_content = ""
         target_content = ""
+        source_judgment = None
+        target_judgment = None
         
-        # Get source PDF content
+        # First try local PDFs
         if pdfs_dir.exists():
             pdf_files = list(pdfs_dir.glob("*.pdf"))
             if source_judgment_id <= len(pdf_files):
@@ -489,10 +523,7 @@ async def analyze_citation(request: Request):
                         source_content = source_result.get("full_text", "")
                 except Exception as e:
                     print(f"Error processing source PDF: {e}")
-        
-        # Get target PDF content  
-        if pdfs_dir.exists():
-            pdf_files = list(pdfs_dir.glob("*.pdf"))
+            
             if target_judgment_id <= len(pdf_files):
                 target_file = pdf_files[target_judgment_id - 1]
                 try:
@@ -502,7 +533,18 @@ async def analyze_citation(request: Request):
                 except Exception as e:
                     print(f"Error processing target PDF: {e}")
         
-        # Use actual PDF content if available, otherwise use context text
+        # Fallback to sample data if no local content
+        if not source_content:
+            source_judgment = get_judgment_by_id(source_judgment_id)
+            if source_judgment:
+                source_content = source_judgment.get("full_text", "")
+        
+        if not target_content:
+            target_judgment = get_judgment_by_id(target_judgment_id)
+            if target_judgment:
+                target_content = target_judgment.get("full_text", "")
+        
+        # Use actual content if available, otherwise use context text
         analysis_text = context_text
         if source_content and target_content:
             # Look for citations of target in source
@@ -608,7 +650,12 @@ async def summarize_case(judgment_id: int):
         summary_result = await case_summarizer.summarize_case(full_text, case_title, pdf_file.name, False)
         
         if not summary_result.get("success", False):
-            raise HTTPException(status_code=500, detail=f"Error generating summary: {summary_result.get('error', 'Unknown error')}")
+            error_msg = summary_result.get('error', 'Unknown error')
+            # Handle specific OpenAI quota error
+            if 'insufficient_quota' in error_msg or 'quota' in error_msg.lower():
+                raise HTTPException(status_code=503, detail="AI service temporarily unavailable due to quota limits. Please try again later or contact support.")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error generating summary: {error_msg}")
         
         return {
             "judgment_id": judgment_id,
@@ -958,3 +1005,51 @@ async def extract_timeline(judgment_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error extracting timeline: {str(e)}")
+
+# Chatbot endpoint
+@app.post("/api/chatbot/query")
+async def chatbot_query(request: Request):
+    """Handle chatbot queries with AI-powered legal research"""
+    try:
+        body = await request.json()
+        query = body.get("query", "")
+        user_id = body.get("user_id", 1)
+        
+        if not query.strip():
+            return {
+                "success": False,
+                "error": "Query cannot be empty",
+                "response": "Please provide a legal question or query."
+            }
+        
+        # Initialize AI service locally
+        print(f"🔧 Initializing AI service for query: {query}")
+        ai_service = AIService()
+        print(f"🔧 AI service initialized. Client type: {type(ai_service.openai_client)}")
+        
+        # Process the query using AI service
+        result = await ai_service.process_legal_query(
+            query=query,
+            user_id=user_id,
+            context_limit=3
+        )
+        print(f"🔧 AI service result: {result.get('response', 'No response')[:100]}...")
+        
+        return {
+            "success": True,
+            "response": result.get("response", "I apologize, but I couldn't process your query."),
+            "citations": result.get("citations", []),
+            "confidence_score": result.get("confidence_score", 0),
+            "response_time_ms": result.get("response_time_ms", 0),
+            "tokens_used": result.get("tokens_used", 0),
+            "query_intent": result.get("query_intent", "general"),
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "response": "I apologize, but I encountered an error processing your query. Please try again.",
+            "timestamp": time.time()
+        }

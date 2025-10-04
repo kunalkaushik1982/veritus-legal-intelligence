@@ -1,4 +1,3 @@
-"use client";
 
 import React, { useEffect, useState, useRef } from 'react';
 import { User } from 'lucide-react';
@@ -42,8 +41,7 @@ const CursorOverlay: React.FC<CursorOverlayProps> = ({
       const walker = document.createTreeWalker(
         editorRef.current,
         NodeFilter.SHOW_TEXT,
-        null,
-        false
+        null
       );
       
       let node;

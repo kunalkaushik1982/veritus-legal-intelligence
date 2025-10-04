@@ -21,6 +21,7 @@ import {
   Users
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import API_CONFIG from '../utils/config';
 
 interface ChatMessage {
   id: string;
@@ -77,7 +78,7 @@ export default function Dashboard() {
   const chatMutation = useMutation(
     async (queryText: string) => {
       const token = localStorage.getItem('access_token');
-      const response = await fetch('http://localhost:8000/api/chatbot/query', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/chatbot/query'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -149,7 +150,7 @@ export default function Dashboard() {
     
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch('http://localhost:8000/api/batch/process-existing', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/batch/process-existing'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

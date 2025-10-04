@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { 
   Bold, 
@@ -41,7 +39,7 @@ interface ActiveUser {
 
 interface Operation {
   id: string;
-  type: 'insert' | 'delete' | 'retain';
+  type: 'insert' | 'delete' | 'retain' | 'replace';
   position: number;
   content: string;
   length: number;
@@ -63,6 +61,7 @@ const CollaborativeEditor: React.FC<CollaborativeEditorProps> = ({
   const [documentVersion, setDocumentVersion] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [content, setContent] = useState('');
+  const [isApplyingRemoteOperation, setIsApplyingRemoteOperation] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -185,13 +184,50 @@ const CollaborativeEditor: React.FC<CollaborativeEditorProps> = ({
         break;
 
       case 'operation_applied':
-        console.log('Operation applied:', message.operation);
-        if (message.document_content) {
-          setContent(message.document_content);
-          if (editorRef.current) {
-            editorRef.current.innerHTML = message.document_content;
+        console.log('📥 Remote operation applied:', message.operation);
+        if (message.document_content !== undefined && message.operation?.user_id !== userId) {
+          // Set flag to prevent triggering local change detection
+          setIsApplyingRemoteOperation(true);
+          
+          // Save current cursor position before applying remote changes
+          let savedCursorPosition = 0;
+          if (editorRef.current && document.activeElement === editorRef.current) {
+            const selection = window.getSelection();
+            if (selection && selection.rangeCount > 0) {
+              const range = selection.getRangeAt(0);
+              // Get cursor position relative to the entire text content
+              savedCursorPosition = getCursorPosition(editorRef.current);
+              
+              // Adjust cursor position based on the remote operation
+              if (message.operation) {
+                savedCursorPosition = adjustCursorPosition(
+                  savedCursorPosition, 
+                  message.operation
+                );
+              }
+            }
           }
+          
+          // Update content state
+          setContent(message.document_content);
+          
+          // Update editor content
+          if (editorRef.current) {
+            editorRef.current.textContent = message.document_content;
+            
+            // Restore cursor position if this editor was focused
+            if (document.activeElement === editorRef.current) {
+              restoreCursorPosition(editorRef.current, savedCursorPosition);
+            }
+          }
+          
+          // Update document version
           setDocumentVersion(message.document_version || 0);
+          
+          // Reset flag after a brief delay
+          setTimeout(() => {
+            setIsApplyingRemoteOperation(false);
+          }, 100);
         }
         break;
 
@@ -245,37 +281,205 @@ const CollaborativeEditor: React.FC<CollaborativeEditorProps> = ({
     }
   }, []);
 
-  // Handle text changes
+  // Handle text changes with proper OT
   const handleTextChange = useCallback(() => {
-    if (!editorRef.current || !isConnected || !wsRef.current) return;
+    if (!editorRef.current || !isConnected || !wsRef.current || isApplyingRemoteOperation) return;
 
-    const newContent = editorRef.current.innerHTML;
-    if (newContent !== content) {
-      console.log('📝 Content changed, sending update to server');
+    const newContent = editorRef.current.textContent || '';
+    const oldContent = content;
+    
+    if (newContent !== oldContent) {
+      console.log('📝 Content changed from:', oldContent, 'to:', newContent);
       
-      // For now, send the complete content as a replacement operation
-      // This prevents duplication by replacing rather than inserting
-      const operation: Operation = {
-        id: `op-${Date.now()}`,
-        type: 'replace', // Use replace instead of insert
-        position: 0,
-        content: newContent,
-        length: newContent.length,
-        user_id: userId,
-        username: username,
-        timestamp: new Date().toISOString(),
-        version: documentVersion
-      };
+      // Calculate the difference between old and new content
+      const operations = calculateOperations(oldContent, newContent);
+      
+      // Send each operation
+      operations.forEach(operation => {
+        const opData = {
+          id: `op-${Date.now()}-${Math.random()}`,
+          type: operation.type,
+          position: operation.position,
+          content: operation.content || '',
+          length: operation.length || 0,
+          user_id: userId,
+          username: username,
+          timestamp: new Date().toISOString(),
+          version: documentVersion
+        };
 
-      wsRef.current.send(JSON.stringify({
-        type: 'operation',
-        operation: operation
-      }));
-      
-      // Update local content after sending
+        wsRef.current?.send(JSON.stringify({
+          type: 'operation',
+          operation: opData
+        }));
+        
+        console.log('📤 Sent operation:', opData);
+      });
+
       setContent(newContent);
+      setDocumentVersion(prev => prev + operations.length);
     }
-  }, [content, isConnected, userId, username, documentVersion]);
+  }, [content, isConnected, userId, username, documentVersion, isApplyingRemoteOperation]);
+
+  // Helper function to get current cursor position in text
+  const getCursorPosition = useCallback((element: HTMLElement): number => {
+    try {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return 0;
+      
+      const range = selection.getRangeAt(0);
+      const preCaretRange = range.cloneRange();
+      preCaretRange.selectNodeContents(element);
+      preCaretRange.setEnd(range.endContainer, range.endOffset);
+      
+      return preCaretRange.toString().length;
+    } catch (error) {
+      console.warn('Error getting cursor position:', error);
+      return 0;
+    }
+  }, []);
+
+  // Helper function to adjust cursor position based on remote operation
+  const adjustCursorPosition = useCallback((cursorPos: number, operation: any): number => {
+    if (!operation) return cursorPos;
+    
+    const opPosition = operation.position || 0;
+    
+    if (operation.type === 'insert') {
+      // If insertion happened before cursor, move cursor forward
+      if (opPosition <= cursorPos) {
+        return cursorPos + (operation.content?.length || 0);
+      }
+    } else if (operation.type === 'delete') {
+      // If deletion happened before cursor, move cursor backward
+      const deleteLength = operation.length || 0;
+      if (opPosition < cursorPos) {
+        if (opPosition + deleteLength <= cursorPos) {
+          // Deletion was entirely before cursor
+          return cursorPos - deleteLength;
+        } else {
+          // Deletion overlaps with cursor position
+          return opPosition;
+        }
+      }
+    }
+    
+    return cursorPos;
+  }, []);
+
+  // Helper function to restore cursor position
+  const restoreCursorPosition = useCallback((element: HTMLElement, position: number) => {
+    try {
+      const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      
+      let currentPosition = 0;
+      let node = walker.nextNode();
+      
+      while (node) {
+        const nodeLength = node.textContent?.length || 0;
+        
+        if (currentPosition + nodeLength >= position) {
+          // Found the target node
+          const range = document.createRange();
+          const selection = window.getSelection();
+          
+          const offset = position - currentPosition;
+          range.setStart(node, Math.min(offset, nodeLength));
+          range.setEnd(node, Math.min(offset, nodeLength));
+          
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          return;
+        }
+        
+        currentPosition += nodeLength;
+        node = walker.nextNode();
+      }
+      
+      // If we couldn't find the exact position, set cursor at the end
+      const range = document.createRange();
+      const selection = window.getSelection();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      
+    } catch (error) {
+      console.warn('Error restoring cursor position:', error);
+    }
+  }, []);
+
+  // Calculate operations between old and new content
+  const calculateOperations = useCallback((oldText: string, newText: string): Array<{type: string, position: number, content?: string, length?: number}> => {
+    const operations: Array<{type: string, position: number, content?: string, length?: number}> = [];
+    
+    // Simple diff algorithm
+    let i = 0;
+    const minLength = Math.min(oldText.length, newText.length);
+    
+    // Find the first difference
+    while (i < minLength && oldText[i] === newText[i]) {
+      i++;
+    }
+    
+    if (i === oldText.length && i === newText.length) {
+      // No changes
+      return operations;
+    }
+    
+    if (newText.length > oldText.length) {
+      // Insertion
+      const insertedText = newText.substring(i, i + (newText.length - oldText.length));
+      operations.push({
+        type: 'insert',
+        position: i,
+        content: insertedText
+      });
+    } else if (newText.length < oldText.length) {
+      // Deletion
+      const deletedLength = oldText.length - newText.length;
+      operations.push({
+        type: 'delete',
+        position: i,
+        length: deletedLength
+      });
+    } else {
+      // Replacement (same length, different content)
+      // First delete the old content, then insert the new
+      let j = oldText.length - 1;
+      let k = newText.length - 1;
+      
+      // Find the last difference
+      while (j >= i && k >= i && oldText[j] === newText[k]) {
+        j--;
+        k--;
+      }
+      
+      if (j >= i) {
+        // Delete the changed portion
+        operations.push({
+          type: 'delete',
+          position: i,
+          length: j - i + 1
+        });
+      }
+      
+      if (k >= i) {
+        // Insert the new portion
+        operations.push({
+          type: 'insert',
+          position: i,
+          content: newText.substring(i, k + 1)
+        });
+      }
+    }
+    
+    return operations;
+  }, []);
 
   // Load document content
   const loadDocumentContent = useCallback(async () => {

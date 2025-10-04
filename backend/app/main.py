@@ -11,7 +11,7 @@ import logging
 
 from app.config import settings
 from app.database import init_db
-from app.api import auth, chatbot, citations, timelines, judgments, users, test
+from app.api import auth, citations, timelines, judgments, users, test
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +27,6 @@ async def lifespan(app: FastAPI):
         logger.info("🚀 Veritus backend started successfully!")
         logger.info(f"📊 Database: {settings.DATABASE_URL}")
         logger.info(f"🔑 OpenAI API: {'Configured' if settings.OPENAI_API_KEY else 'Not configured'}")
-        logger.info(f"🔍 Pinecone: {'Configured' if settings.PINECONE_API_KEY else 'Not configured'}")
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
         raise
@@ -60,7 +59,6 @@ app.add_middleware(
 # Include API routers
 app.include_router(test.router, prefix="/api/test", tags=["Test"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(chatbot.router, prefix="/api/chatbot", tags=["Chatbot"])
 app.include_router(citations.router, prefix="/api/citations", tags=["Citations"])
 app.include_router(timelines.router, prefix="/api/timelines", tags=["Timelines"])
 app.include_router(judgments.router, prefix="/api/judgments", tags=["Judgments"])
@@ -88,7 +86,6 @@ async def health_check():
             "database": "connected",
             "redis": "connected",
             "openai": "configured" if settings.OPENAI_API_KEY else "not_configured",
-            "pinecone": "configured" if settings.PINECONE_API_KEY else "not_configured"
         }
     }
 

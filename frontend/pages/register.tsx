@@ -5,6 +5,7 @@ import { useMutation } from 'react-query';
 import { Eye, EyeOff, Mail, Lock, User, Scale } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import API_CONFIG from '../utils/config';
 
 interface RegisterFormData {
   email: string;
@@ -32,7 +33,7 @@ export default function Register() {
 
   const registerMutation = useMutation(
     async (data: RegisterFormData) => {
-      const response = await fetch('http://localhost:8000/api/auth/register', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/auth/register'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

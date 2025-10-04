@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Plus, 
@@ -125,7 +123,7 @@ const DocumentManager: React.FC<DocumentManagerProps> = ({
       
     } catch (error) {
       console.error('Error deleting document:', error);
-      toast.error(error.message || 'Error deleting document');
+      toast.error(error instanceof Error ? error.message : 'Error deleting document');
     }
   }, [loadDocuments]);
 

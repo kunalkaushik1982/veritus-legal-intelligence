@@ -30,16 +30,19 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4"
     OPENAI_MAX_TOKENS: int = 2000
     
-    # Vector Database
+    # Vector Database (removed - will be separate service)
     PINECONE_API_KEY: Optional[str] = None
     PINECONE_ENVIRONMENT: Optional[str] = None
-    PINECONE_INDEX_NAME: str = "veritus-judgments"
+    PINECONE_INDEX_NAME: Optional[str] = None
     
     # Cloud Storage
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     AWS_BUCKET_NAME: str = "veritus-judgments"
     AWS_REGION: str = "us-east-1"
+    
+    # Google Drive (for future use)
+    GOOGLE_DRIVE_FOLDER_ID: Optional[str] = None
     
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"

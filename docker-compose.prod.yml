@@ -1,0 +1,22 @@
+# Production docker-compose configuration
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+version: '3.8'
+
+services:
+  backend:
+    # Production backend configuration
+    volumes:
+      - ./pdfs:/app/pdfs  # Only mount PDFs, not source code
+    command: uvicorn app.simple_main:app --host 0.0.0.0 --port 8000
+    environment:
+      - DEBUG=False
+      - CORS_ORIGINS=https://your-production-domain.com
+
+  frontend:
+    # Production frontend configuration
+    volumes:
+      - /app/node_modules  # Preserve node_modules
+    command: npm run start  # Production start command
+    environment:
+      - NODE_ENV=production

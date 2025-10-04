@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { 
@@ -11,16 +11,15 @@ import {
   Filter,
   Download,
   Eye,
-  Loader2,
   ChevronDown,
   ChevronUp,
   SortAsc,
   SortDesc,
   Clock,
-  Brain,
-  CheckCircle
+  Brain
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import API_CONFIG from '../utils/config';
 
 interface Judgment {
   id: number;
@@ -34,7 +33,8 @@ interface Judgment {
   filename?: string;
   file_path?: string;
   file_size?: number;
-  upload_date?: string;
+  extraction_status?: string;
+  error?: string;
 }
 
 interface JudgmentMetadata {
@@ -49,121 +49,134 @@ export default function JudgmentsLibrary() {
   const router = useRouter();
   const [judgments, setJudgments] = useState<Judgment[]>([]);
   const [filteredJudgments, setFilteredJudgments] = useState<Judgment[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'title' | 'case_number'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [showFilters, setShowFilters] = useState(false);
-  const [dateFilter, setDateFilter] = useState('');
-  const [courtFilter, setCourtFilter] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState<number | null>(null);
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
-  useEffect(() => {
-    // Check if user is logged in
-    const token = localStorage.getItem('access_token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
+  // Extract metadata for display
+  const extractMetadata = (judgment: Judgment): JudgmentMetadata => {
+    // SIMPLE & ROBUST: Always use filename as the primary identifier
+    // Filename is reliable, consistent, and always available
+    const caseNumber = judgment.filename || `Case ${judgment.id}`;
     
-    loadJudgments();
-  }, []);
-
-  useEffect(() => {
-    filterAndSortJudgments();
-  }, [judgments, searchQuery, sortBy, sortOrder, dateFilter, courtFilter]);
-
-  const loadJudgments = async () => {
-    setIsLoading(true);
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch('http://localhost:8000/api/judgments/', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setJudgments(data.judgments || []);
-      } else {
-        console.error('Failed to load judgments:', response.status);
-        setJudgments([]);
-      }
-    } catch (error) {
-      console.error('Error loading judgments:', error);
-      setJudgments([]);
-      toast.error('Failed to load judgments');
-    } finally {
-      setIsLoading(false);
-    }
+    return {
+      party1: judgment.petitioner || 'Unknown Petitioner',
+      party2: judgment.respondent || 'Unknown Respondent',
+      judgment_date: judgment.judgment_date || 'Date not available',
+      case_number: caseNumber, // Always use filename - no complex logic needed
+      court: 'Supreme Court of India'
+    };
   };
 
-  const filterAndSortJudgments = () => {
-    let filtered = [...judgments];
+  // Fetch judgments
+  useEffect(() => {
+    const fetchJudgments = async () => {
+      try {
+        const response = await fetch(API_CONFIG.getApiUrl('/api/judgments/'));
+        if (response.ok) {
+          const data = await response.json();
+          setJudgments(data.judgments || []);
+          setFilteredJudgments(data.judgments || []);
+        } else {
+          toast.error('Failed to load judgments');
+        }
+      } catch (error) {
+        console.error('Error fetching judgments:', error);
+        toast.error('Failed to load judgments');
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    // Apply search filter
-    if (searchQuery) {
-      filtered = filtered.filter(judgment =>
-        (judgment.case_title && judgment.case_title.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (judgment.case_number && judgment.case_number.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (judgment.petitioner && judgment.petitioner.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (judgment.respondent && judgment.respondent.toLowerCase().includes(searchQuery.toLowerCase()))
-      );
-    }
+    fetchJudgments();
+  }, []);
 
-    // Apply date filter
-    if (dateFilter) {
-      filtered = filtered.filter(judgment => {
-        if (!judgment.judgment_date) return false;
-        const judgmentYear = new Date(judgment.judgment_date).getFullYear().toString();
-        return judgmentYear === dateFilter;
+  // Filter and sort judgments
+  useEffect(() => {
+    // First filter based on search term
+    let filtered = judgments;
+    if (searchTerm) {
+      filtered = judgments.filter(judgment => {
+        const metadata = extractMetadata(judgment);
+        const searchLower = searchTerm.toLowerCase();
+        return (
+          metadata.party1.toLowerCase().includes(searchLower) ||
+          metadata.party2.toLowerCase().includes(searchLower) ||
+          metadata.case_number.toLowerCase().includes(searchLower) ||
+          (judgment.case_title && judgment.case_title.toLowerCase().includes(searchLower)) ||
+          (judgment.filename && judgment.filename.toLowerCase().includes(searchLower))
+        );
       });
     }
 
-    // Apply court filter
-    if (courtFilter) {
-      filtered = filtered.filter(judgment =>
-        (judgment.case_title && judgment.case_title.toLowerCase().includes(courtFilter.toLowerCase()))
-      );
-    }
-
-    // Apply sorting
-    filtered.sort((a, b) => {
+    // Then sort the filtered results
+    const sorted = filtered.sort((a, b) => {
       let comparison = 0;
       
       switch (sortBy) {
         case 'date':
-          const dateA = a.judgment_date ? new Date(a.judgment_date).getTime() : 0;
-          const dateB = b.judgment_date ? new Date(b.judgment_date).getTime() : 0;
+          const dateA = new Date(a.judgment_date || '').getTime();
+          const dateB = new Date(b.judgment_date || '').getTime();
           comparison = dateA - dateB;
           break;
         case 'title':
-          comparison = a.case_title.localeCompare(b.case_title);
+          const titleA = a.case_title || '';
+          const titleB = b.case_title || '';
+          comparison = titleA.localeCompare(titleB);
           break;
         case 'case_number':
-          comparison = a.case_number.localeCompare(b.case_number);
+          const caseA = a.case_number || a.filename || '';
+          const caseB = b.case_number || b.filename || '';
+          comparison = caseA.localeCompare(caseB);
           break;
       }
       
       return sortOrder === 'asc' ? comparison : -comparison;
     });
 
-    setFilteredJudgments(filtered);
+    setFilteredJudgments(sorted);
+    
+    // Reset to first page when search term or sort changes
+    setCurrentPage(1);
+  }, [searchTerm, sortBy, sortOrder, judgments]);
+
+  // Pagination logic
+  const totalPages = Math.ceil(filteredJudgments.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentJudgments = filteredJudgments.slice(startIndex, endIndex);
+
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const extractMetadata = (judgment: Judgment): JudgmentMetadata => {
-    return {
-      party1: judgment.petitioner || 'Unknown Petitioner',
-      party2: judgment.respondent || 'Unknown Respondent',
-      judgment_date: judgment.judgment_date || 'Unknown Date',
-      case_number: judgment.case_number,
-      court: 'Supreme Court' // Default for now
-    };
+  const handleItemsPerPageChange = (newItemsPerPage: number) => {
+    setItemsPerPage(newItemsPerPage);
+    setCurrentPage(1);
+    // Save preference to localStorage
+    localStorage.setItem('judgmentsItemsPerPage', newItemsPerPage.toString());
   };
+
+  // Load items per page preference from localStorage
+  useEffect(() => {
+    const savedItemsPerPage = localStorage.getItem('judgmentsItemsPerPage');
+    if (savedItemsPerPage) {
+      setItemsPerPage(parseInt(savedItemsPerPage));
+    }
+  }, []);
 
   const formatDate = (dateString: string) => {
+    if (!dateString) return 'Date not available';
     try {
-      return new Date(dateString).toLocaleDateString('en-US', {
+      return new Date(dateString).toLocaleDateString('en-IN', {
         year: 'numeric',
         month: 'long',
         day: 'numeric'
@@ -173,466 +186,370 @@ export default function JudgmentsLibrary() {
     }
   };
 
-  const getAvailableYears = () => {
-    const years = new Set<string>();
-    judgments.forEach(judgment => {
-      if (judgment.judgment_date) {
-        years.add(new Date(judgment.judgment_date).getFullYear().toString());
-      }
-    });
-    return Array.from(years).sort((a, b) => b.localeCompare(a));
-  };
-
-  const handleSort = (field: 'date' | 'title' | 'case_number') => {
-    if (sortBy === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(field);
-      setSortOrder('asc');
-    }
-  };
-
-  const handleViewJudgment = async (judgment: Judgment) => {
-    try {
-      // Get the PDF file from the backend
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`http://localhost:8000/api/judgments/${judgment.id}/view`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
+  const handleSummarizeCase = useCallback(async (judgment: Judgment) => {
+    if (isGeneratingSummary === judgment.id) {
+      toast('AI Summary is already generating for this judgment', {
+        icon: 'ℹ️',
+        duration: 2000,
       });
-
-      if (response.ok) {
-        // Get the PDF blob
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        
-        // Open in new tab
-        const newWindow = window.open(url, '_blank');
-        if (!newWindow) {
-          toast.error('Please allow popups to view PDFs');
-        } else {
-          toast.success(`Opening ${judgment.case_title}`);
-        }
-        
-        // Clean up the URL after a delay
-        setTimeout(() => {
-          window.URL.revokeObjectURL(url);
-        }, 1000);
-      } else {
-        toast.error('Failed to load PDF');
-      }
-    } catch (error) {
-      console.error('Error viewing PDF:', error);
-      toast.error('Failed to view PDF');
+      return;
     }
-  };
 
-  const handleDownloadJudgment = async (judgment: Judgment) => {
+    setIsGeneratingSummary(judgment.id);
+
     try {
-      // Get the PDF file from the backend
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`http://localhost:8000/api/judgments/${judgment.id}/download`, {
+      const response = await fetch(API_CONFIG.getApiUrl(`/api/summary/${judgment.id}`), {
         headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        // Get the PDF blob
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        
-        // Create download link
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${judgment.case_title || judgment.filename || 'judgment'}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        // Clean up the URL
-        window.URL.revokeObjectURL(url);
-        
-        toast.success(`Downloaded ${judgment.case_title}`);
-      } else {
-        toast.error('Failed to download PDF');
-      }
-    } catch (error) {
-      console.error('Error downloading PDF:', error);
-      toast.error('Failed to download PDF');
-    }
-  };
-
-  const handleViewText = async (judgment: Judgment) => {
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`http://localhost:8000/api/judgments/${judgment.id}/text`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
         },
       });
 
       if (response.ok) {
         const data = await response.json();
-        
-        // Create a new window/tab to display the text
-        const textWindow = window.open('', '_blank', 'width=800,height=600,scrollbars=yes');
-        if (textWindow) {
-          textWindow.document.write(`
-            <html>
-              <head>
-                <title>${judgment.case_title} - Full Text</title>
-                <style>
-                  body { 
-                    font-family: Arial, sans-serif; 
-                    line-height: 1.6; 
-                    margin: 20px; 
-                    background-color: #f9f9f9;
-                  }
-                  .header { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    margin-bottom: 20px;
-                  }
-                  .content { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    white-space: pre-wrap;
-                    font-size: 14px;
-                  }
-                  .meta { 
-                    color: #666; 
-                    font-size: 12px; 
-                    margin-bottom: 10px;
-                  }
-                </style>
-              </head>
-              <body>
-                <div class="header">
-                  <h1>${judgment.case_title}</h1>
-                  <div class="meta">
-                    <strong>File:</strong> ${data.filename} | 
-                    <strong>Text Length:</strong> ${data.text_length.toLocaleString()} characters | 
-                    <strong>Pages:</strong> ${data.page_count}
-                  </div>
-                </div>
-                <div class="content">${data.full_text}</div>
-              </body>
-            </html>
-          `);
-          textWindow.document.close();
-        }
-        
-        toast.success(`Opened full text for ${judgment.case_title}`);
-      } else {
-        toast.error('Failed to load judgment text');
-      }
-    } catch (error) {
-      console.error('View text error:', error);
-      toast.error('Failed to load judgment text');
-    }
-  };
+        const cacheStatus = data.from_cache ? 'cached' : 'AI generated';
+        toast.success(`Summary loaded (${cacheStatus})`, { duration: 2000 });
 
-  const handleViewTimeline = async (judgment: Judgment) => {
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`http://localhost:8000/api/timeline/${judgment.id}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Create timeline HTML
-        const timelineHtml = data.timeline_events.map((event: any) => `
-          <div class="timeline-event">
-            <div class="event-header">
-              <span class="event-date">${event.event_date || 'Date not specified'}</span>
-              <span class="event-type ${event.event_type}">${event.event_type.toUpperCase()}</span>
-            </div>
-            <div class="event-description">${event.event_description}</div>
-            ${event.parties_involved ? `<div class="event-parties"><strong>Parties:</strong> ${event.parties_involved.join(', ')}</div>` : ''}
-            ${event.court_involved ? `<div class="event-court"><strong>Court:</strong> ${event.court_involved}</div>` : ''}
-            <div class="event-meta">
-              <span class="confidence">Confidence: ${event.confidence_score}%</span>
-              <span class="significance">Significance: ${event.legal_significance}</span>
-            </div>
-          </div>
-        `).join('');
-        
-        // Create a new window/tab to display the timeline
-        const timelineWindow = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
-        if (timelineWindow) {
-          timelineWindow.document.write(`
-            <html>
-              <head>
-                <title>${judgment.case_title} - Timeline</title>
-                <style>
-                  body { 
-                    font-family: Arial, sans-serif; 
-                    line-height: 1.6; 
-                    margin: 20px; 
-                    background-color: #f9f9f9;
-                  }
-                  .header { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    margin-bottom: 20px;
-                  }
-                  .timeline-container { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                  }
-                  .timeline-event {
-                    border-left: 3px solid #3b82f6;
-                    padding-left: 20px;
-                    margin-bottom: 20px;
-                    position: relative;
-                  }
-                  .timeline-event::before {
-                    content: '';
-                    position: absolute;
-                    left: -6px;
-                    top: 0;
-                    width: 10px;
-                    height: 10px;
-                    background: #3b82f6;
-                    border-radius: 50%;
-                  }
-                  .event-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 10px;
-                  }
-                  .event-date {
-                    font-weight: bold;
-                    color: #1f2937;
-                  }
-                  .event-type {
-                    padding: 4px 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    font-weight: bold;
-                    text-transform: uppercase;
-                  }
-                  .event-type.judgment { background: #dcfce7; color: #166534; }
-                  .event-type.hearing { background: #dbeafe; color: #1e40af; }
-                  .event-type.filing { background: #fef3c7; color: #92400e; }
-                  .event-type.appeal { background: #fce7f3; color: #be185d; }
-                  .event-type.order { background: #e0e7ff; color: #3730a3; }
-                  .event-type.general { background: #f3f4f6; color: #374151; }
-                  .event-description {
-                    margin-bottom: 10px;
-                    color: #374151;
-                  }
-                  .event-parties, .event-court {
-                    font-size: 14px;
-                    color: #6b7280;
-                    margin-bottom: 5px;
-                  }
-                  .event-meta {
-                    font-size: 12px;
-                    color: #9ca3af;
-                    display: flex;
-                    gap: 15px;
-                  }
-                  .meta { 
-                    color: #666; 
-                    font-size: 12px; 
-                    margin-bottom: 10px;
-                  }
-                </style>
-              </head>
-              <body>
-                <div class="header">
-                  <h1>${judgment.case_title} - Timeline</h1>
-                  <div class="meta">
-                    <strong>File:</strong> ${data.filename} | 
-                    <strong>Total Events:</strong> ${data.total_events} | 
-                    <strong>Extraction Status:</strong> ${data.extraction_status}
-                  </div>
-                </div>
-                <div class="timeline-container">
-                  ${timelineHtml}
-                </div>
-              </body>
-            </html>
-          `);
-          timelineWindow.document.close();
-        }
-        
-        toast.success(`Opened timeline for ${judgment.case_title}`);
-      } else {
-        toast.error('Failed to load judgment timeline');
-      }
-    } catch (error) {
-      console.error('View timeline error:', error);
-      toast.error('Failed to load judgment timeline');
-    }
-  };
-
-  const handleSummarizeCase = async (judgment: Judgment) => {
-    try {
-      const token = localStorage.getItem('access_token');
-      toast.loading('Loading case summary...', { duration: 2000 });
-      
-      const response = await fetch(`http://localhost:8000/api/summary/${judgment.id}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Create summary HTML
-        const summaryHtml = `
-          <div class="summary-section">
-            <h2>Facts</h2>
-            <div class="section-content">${data.summary.facts || 'No facts available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Issues</h2>
-            <div class="section-content">${data.summary.issues || 'No issues available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Petitioner's Arguments</h2>
-            <div class="section-content">${data.summary.petitioner_arguments || 'No petitioner arguments available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Respondent's Arguments</h2>
-            <div class="section-content">${data.summary.respondent_arguments || 'No respondent arguments available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Analysis of the Law</h2>
-            <div class="section-content">${data.summary.analysis_of_law || 'No legal analysis available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Precedent Analysis</h2>
-            <div class="section-content">${data.summary.precedent_analysis || 'No precedent analysis available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Court's Reasoning</h2>
-            <div class="section-content">${data.summary.courts_reasoning || 'No court reasoning available'}</div>
-          </div>
-          <div class="summary-section">
-            <h2>Conclusion</h2>
-            <div class="section-content">${data.summary.conclusion || 'No conclusion available'}</div>
-          </div>
-        `;
-        
-        // Create a new window/tab to display the summary
-        const summaryWindow = window.open('', '_blank', 'width=1000,height=800,scrollbars=yes');
+        // Open summary in new window
+        const summaryWindow = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
         if (summaryWindow) {
+          const metadata = extractMetadata(judgment);
           summaryWindow.document.write(`
             <html>
               <head>
-                <title>${judgment.case_title || judgment.filename} - AI Case Summary</title>
+                <title>${judgment.case_title || 'Untitled Case'} - AI Summary</title>
                 <style>
                   body { 
                     font-family: Arial, sans-serif; 
                     line-height: 1.6; 
                     margin: 20px; 
-                    background-color: #f9f9f9;
+                    background: #f8fafc;
                   }
                   .header { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    margin-bottom: 20px;
-                  }
-                  .summary-container { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                  }
-                  .summary-section {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 30px; 
+                    border-radius: 12px; 
                     margin-bottom: 30px;
-                    padding-bottom: 20px;
-                    border-bottom: 1px solid #e5e7eb;
+                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
                   }
-                  .summary-section:last-child {
-                    border-bottom: none;
+                  .content { 
+                    background: white;
+                    padding: 30px;
+                    border-radius: 12px;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
                   }
-                  .summary-section h2 {
-                    color: #1f2937;
-                    font-size: 18px;
-                    font-weight: bold;
-                    margin-bottom: 15px;
-                    padding: 10px 15px;
-                    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-                    color: white;
-                    border-radius: 6px;
-                  }
-                  .section-content {
-                    padding: 15px;
+                  .section {
+                    margin-bottom: 25px;
+                    padding: 20px;
                     background: #f8fafc;
+                    border-radius: 8px;
+                    border-left: 4px solid #667eea;
+                  }
+                  .section h3 {
+                    color: #2d3748;
+                    margin-bottom: 15px;
+                    font-size: 18px;
+                  }
+                  .section p, .section ul {
+                    color: #4a5568;
+                    margin: 0;
+                  }
+                  .cache-info {
+                    background: #e6fffa;
+                    border: 1px solid #81e6d9;
                     border-radius: 6px;
-                    color: #374151;
-                    white-space: pre-wrap;
-                  }
-                  .meta { 
-                    color: #666; 
-                    font-size: 12px; 
-                    margin-bottom: 10px;
-                  }
-                  .ai-badge {
-                    display: inline-block;
-                    background: linear-gradient(135deg, #10b981, #059669);
-                    color: white;
-                    padding: 4px 8px;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    font-weight: bold;
-                    margin-left: 10px;
+                    padding: 10px;
+                    margin-bottom: 20px;
+                    font-size: 14px;
+                    color: #234e52;
                   }
                 </style>
               </head>
               <body>
                 <div class="header">
-                  <h1>${judgment.case_title || judgment.filename} - AI Case Summary <span class="ai-badge">AI GENERATED</span></h1>
-                  <div class="meta">
-                    <strong>File:</strong> ${data.filename} | 
-                    <strong>Model:</strong> ${data.model_used} | 
-                    <strong>Tokens Used:</strong> ${data.tokens_used || 'N/A'} | 
-                    <strong>Generated:</strong> ${new Date(data.generated_at).toLocaleString()} |
-                    <strong>Source:</strong> ${data.from_cache ? 'Cached' : 'AI Generated'}
-                  </div>
+                  <h1>${judgment.case_title || 'Untitled Case'}</h1>
+                  <p><strong>Case Number:</strong> ${metadata.case_number}</p>
+                  <p><strong>Parties:</strong> ${metadata.party1} vs ${metadata.party2}</p>
+                  <p><strong>Date:</strong> ${formatDate(judgment.judgment_date || '')}</p>
                 </div>
-                <div class="summary-container">
-                  ${summaryHtml}
+                
+                <div class="cache-info">
+                  <strong>Summary Status:</strong> ${cacheStatus} | 
+                  <strong>Model:</strong> ${data.model_used || 'N/A'} | 
+                  <strong>Generated:</strong> ${new Date(data.generated_at).toLocaleString()}
+                </div>
+                
+                <div class="content">
+                  ${data.summary ? `
+                    ${data.summary.facts ? `
+                      <div class="section">
+                        <h3>📋 Facts</h3>
+                        <p>${data.summary.facts}</p>
+                      </div>
+                    ` : ''}
+                    
+                    ${data.summary.issues ? `
+                      <div class="section">
+                        <h3>⚖️ Legal Issues</h3>
+                        <p>${data.summary.issues}</p>
+                      </div>
+                    ` : ''}
+                    
+                    ${data.summary.petitioner_arguments ? `
+                      <div class="section">
+                        <h3>👤 Petitioner's Arguments</h3>
+                        <p>${data.summary.petitioner_arguments}</p>
+                      </div>
+                    ` : ''}
+                    
+                    ${data.summary.respondent_arguments ? `
+                      <div class="section">
+                        <h3>👥 Respondent's Arguments</h3>
+                        <p>${data.summary.respondent_arguments}</p>
+                      </div>
+                    ` : ''}
+                    
+                    ${data.summary.court_reasoning ? `
+                      <div class="section">
+                        <h3>🏛️ Court's Reasoning</h3>
+                        <p>${data.summary.court_reasoning}</p>
+                      </div>
+                    ` : ''}
+                    
+                    ${data.summary.decision ? `
+                      <div class="section">
+                        <h3>⚖️ Decision</h3>
+                        <p>${data.summary.decision}</p>
+                      </div>
+                    ` : ''}
+                    
+                    ${data.summary.citations ? `
+                      <div class="section">
+                        <h3>📚 Citations</h3>
+                        <ul>
+                          ${data.summary.citations.map((citation: string) => `<li>${citation}</li>`).join('')}
+                        </ul>
+                      </div>
+                    ` : ''}
+                  ` : `
+                    <div class="section">
+                      <h3>⚠️ No Summary Available</h3>
+                      <p>Summary data is not available for this judgment.</p>
+                    </div>
+                  `}
+                  
+                  ${data.raw_response ? `
+                    <div class="section">
+                      <h3>📄 Raw AI Response</h3>
+                      <pre style="white-space: pre-wrap; background: #f7fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">${data.raw_response}</pre>
+                    </div>
+                  ` : ''}
                 </div>
               </body>
             </html>
           `);
           summaryWindow.document.close();
         }
-        
-        const cacheStatus = data.from_cache ? ' (from cache)' : ' (AI generated)';
-        toast.success(`Loaded case summary for ${judgment.case_title || judgment.filename}${cacheStatus}`);
       } else {
         const errorData = await response.json();
-        toast.error(`Failed to generate summary: ${errorData.detail || 'Unknown error'}`);
+        const errorMessage = errorData.detail || 'Failed to load summary';
+        
+        // Handle specific quota error
+        if (response.status === 503 || errorMessage.includes('quota') || errorMessage.includes('insufficient_quota')) {
+          toast.error('🤖 AI service quota exceeded. Please try again later or contact support.', { duration: 6000 });
+        } else {
+          toast.error(`Failed to load summary: ${errorMessage}`);
+        }
       }
     } catch (error) {
-      console.error('Summarize case error:', error);
-      toast.error('Failed to generate case summary');
+      console.error('Error loading summary:', error);
+      toast.error('Failed to load case summary');
+    } finally {
+      setIsGeneratingSummary(null);
     }
-  };
+  }, [isGeneratingSummary]);
+
+  const handleViewJudgment = useCallback((judgment: Judgment) => {
+    const viewJudgmentAsync = async () => {
+      try {
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(API_CONFIG.getApiUrl(`/api/judgments/${judgment.id}/view`), {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          window.open(url, '_blank');
+          toast.success(`Opened judgment ${judgment.id}`);
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          toast.error(`Failed to view judgment: ${errorData.detail || 'Unknown error'}`);
+        }
+      } catch (error) {
+        console.error('View judgment error:', error);
+        toast.error('Failed to view judgment');
+      }
+    };
+    
+    setTimeout(() => viewJudgmentAsync(), 0);
+  }, []);
+
+  const handleDownloadJudgment = useCallback((judgment: Judgment) => {
+    const downloadJudgmentAsync = async () => {
+      try {
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(API_CONFIG.getApiUrl(`/api/judgments/${judgment.id}/download`), {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = judgment.filename || `judgment-${judgment.id}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(url);
+          toast.success(`Downloaded ${judgment.filename || 'judgment'}`);
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          toast.error(`Failed to download judgment: ${errorData.detail || 'Unknown error'}`);
+        }
+      } catch (error) {
+        console.error('Download judgment error:', error);
+        toast.error('Failed to download judgment');
+      }
+    };
+    
+    setTimeout(() => downloadJudgmentAsync(), 0);
+  }, []);
+
+  const handleViewText = useCallback((judgment: Judgment) => {
+    const viewTextAsync = async () => {
+      try {
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(API_CONFIG.getApiUrl(`/api/judgments/${judgment.id}/text`), {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const textWindow = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
+          if (textWindow) {
+            const metadata = extractMetadata(judgment);
+            textWindow.document.write(`
+              <html>
+                <head>
+                  <title>${judgment.case_title || 'Untitled Case'} - Text</title>
+                  <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; }
+                    .header { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+                    .content { white-space: pre-wrap; }
+                  </style>
+                </head>
+                <body>
+                  <div class="header">
+                    <h1>${judgment.case_title || 'Untitled Case'}</h1>
+                    <p><strong>Case Number:</strong> ${metadata.case_number}</p>
+                    <p><strong>Date:</strong> ${formatDate(judgment.judgment_date || '')}</p>
+                  </div>
+                  <div class="content">${data.full_text || data.text || 'Text content not available'}</div>
+                </body>
+              </html>
+            `);
+            textWindow.document.close();
+            toast.success(`Opened text for ${judgment.case_title || 'this case'}`);
+          }
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          toast.error(`Failed to load judgment text: ${errorData.detail || 'Unknown error'}`);
+        }
+      } catch (error) {
+        console.error('View text error:', error);
+        toast.error('Failed to load judgment text');
+      }
+    };
+    
+    setTimeout(() => viewTextAsync(), 0);
+  }, []);
+
+  const handleViewTimeline = useCallback((judgment: Judgment) => {
+    const viewTimelineAsync = async () => {
+      try {
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(API_CONFIG.getApiUrl(`/api/timeline/${judgment.id}`), {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const timelineWindow = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
+          if (timelineWindow) {
+            const metadata = extractMetadata(judgment);
+            timelineWindow.document.write(`
+              <html>
+                <head>
+                  <title>${judgment.case_title || 'Untitled Case'} - Timeline</title>
+                  <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; }
+                    .header { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+                    .timeline-event { border-left: 3px solid #3b82f6; padding-left: 20px; margin-bottom: 20px; }
+                  </style>
+                </head>
+                <body>
+                  <div class="header">
+                    <h1>${judgment.case_title || 'Untitled Case'} - Timeline</h1>
+                    <p><strong>Case Number:</strong> ${metadata.case_number}</p>
+                  </div>
+                  <div class="timeline-events">
+                    ${data.timeline_events?.map((event: any) => `
+                      <div class="timeline-event">
+                        <h3>${event.event_date || 'Date not specified'}</h3>
+                        <p>${event.event_description}</p>
+                        <small>Type: ${event.event_type} | Confidence: ${event.confidence_score}%</small>
+                      </div>
+                    `).join('') || '<p>No timeline events found.</p>'}
+                  </div>
+                </body>
+              </html>
+            `);
+            timelineWindow.document.close();
+            toast.success(`Opened timeline for ${judgment.case_title || 'this case'}`);
+          }
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          toast.error(`Failed to load judgment timeline: ${errorData.detail || 'Unknown error'}`);
+        }
+      } catch (error) {
+        console.error('View timeline error:', error);
+        toast.error('Failed to load judgment timeline');
+      }
+    };
+    
+    setTimeout(() => viewTimelineAsync(), 0);
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading judgments...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -641,298 +558,309 @@ export default function JudgmentsLibrary() {
         <meta name="description" content="Browse and search Supreme Court judgments" />
       </Head>
 
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      <div className="min-h-screen bg-gray-50">
         {/* Header */}
-        <header className="bg-white/90 backdrop-blur-md shadow-xl border-b border-gray-200/50 sticky top-0 z-50">
+        <div className="bg-white shadow-sm border-b">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-20">
-              <div className="flex items-center space-x-6">
+            <div className="flex justify-between items-center py-6">
+              <div className="flex items-center">
                 <button
-                  onClick={() => router.push('/dashboard')}
-                  className="flex items-center text-gray-600 hover:text-gray-900 transition-all duration-200 hover:bg-gray-100 px-4 py-2 rounded-xl group"
+                  onClick={() => router.back()}
+                  className="mr-4 p-2 text-gray-400 hover:text-gray-600 transition-colors"
                 >
-                  <ArrowLeft className="w-5 h-5 mr-2 group-hover:-translate-x-1 transition-transform" />
-                  <span className="font-medium">Back to Dashboard</span>
+                  <ArrowLeft className="h-6 w-6" />
                 </button>
-                <div className="flex items-center space-x-4">
-                  <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg">
-                    <BookOpen className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-                      Judgments Library
-                    </h1>
-                    <p className="text-sm text-gray-600 font-medium">Browse Supreme Court Judgments</p>
-                  </div>
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900">Judgments Library</h1>
+                  <p className="text-gray-600 mt-1">
+                    Browse and analyze Supreme Court judgments
+                  </p>
                 </div>
               </div>
               <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2 bg-blue-50 px-4 py-2 rounded-full border border-blue-200">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <span className="text-sm font-medium text-blue-700">
-                    {judgments.length} judgment{judgments.length !== 1 ? 's' : ''} available
-                  </span>
+                <div className="flex items-center space-x-2 text-sm text-gray-500">
+                  <BookOpen className="h-4 w-4" />
+                  <span>{filteredJudgments.length} judgments</span>
                 </div>
               </div>
             </div>
           </div>
-        </header>
+        </div>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {/* Search and Filter Bar */}
-          <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl border border-gray-200/50 p-6 mb-8">
+          {/* Sticky Search and Filters */}
+          <div className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm mb-6 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-4" style={{ position: 'sticky', top: '0px' }}>
             <div className="flex flex-col lg:flex-row gap-4">
               {/* Search */}
               <div className="flex-1">
                 <div className="relative">
-                  <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
                   <input
                     type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search judgments by title, case number, or parties..."
-                    className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white/80"
+                    placeholder="Search judgments, parties, or case numbers..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
               </div>
 
-              {/* Sort and Filter Controls */}
-              <div className="flex items-center space-x-3">
-                {/* Sort Dropdown */}
-                <div className="relative">
-                  <select
-                    value={`${sortBy}-${sortOrder}`}
-                    onChange={(e) => {
-                      const [field, order] = e.target.value.split('-');
-                      setSortBy(field as 'date' | 'title' | 'case_number');
-                      setSortOrder(order as 'asc' | 'desc');
-                    }}
-                    className="appearance-none bg-white border border-gray-200 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="date-desc">Date (Newest First)</option>
-                    <option value="date-asc">Date (Oldest First)</option>
-                    <option value="title-asc">Title (A-Z)</option>
-                    <option value="title-desc">Title (Z-A)</option>
-                    <option value="case_number-asc">Case Number (A-Z)</option>
-                    <option value="case_number-desc">Case Number (Z-A)</option>
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                </div>
-
-                {/* Filter Toggle */}
-                <button
-                  onClick={() => setShowFilters(!showFilters)}
-                  className={`flex items-center px-4 py-3 rounded-xl border transition-all duration-200 ${
-                    showFilters 
-                      ? 'bg-blue-50 border-blue-200 text-blue-700' 
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
+              {/* Sort */}
+              <div className="flex gap-2">
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <Filter className="w-4 h-4 mr-2" />
-                  Filters
-                  {showFilters ? (
-                    <ChevronUp className="w-4 h-4 ml-2" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 ml-2" />
-                  )}
+                  <option value="date">Date</option>
+                  <option value="title">Title</option>
+                  <option value="case_number">Case Number</option>
+                </select>
+                <button
+                  onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                  className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  {sortOrder === 'asc' ? <SortAsc className="h-4 w-4" /> : <SortDesc className="h-4 w-4" />}
                 </button>
               </div>
             </div>
-
-            {/* Advanced Filters */}
-            {showFilters && (
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Year</label>
-                    <select
-                      value={dateFilter}
-                      onChange={(e) => setDateFilter(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">All Years</option>
-                      {getAvailableYears().map(year => (
-                        <option key={year} value={year}>{year}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Court</label>
-                    <select
-                      value={courtFilter}
-                      onChange={(e) => setCourtFilter(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">All Courts</option>
-                      <option value="supreme">Supreme Court</option>
-                      <option value="high">High Court</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Results Summary */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-900">
-                {isLoading ? 'Loading judgments...' : `${filteredJudgments.length} judgment${filteredJudgments.length !== 1 ? 's' : ''} found`}
-              </h2>
-              {!isLoading && (
-                <div className="text-sm text-gray-500">
-                  Showing {filteredJudgments.length} of {judgments.length} judgments
-                </div>
-              )}
+            
+            {/* Results Summary */}
+            <div className="mt-3 text-sm text-gray-600">
+              Showing {startIndex + 1}-{Math.min(endIndex, filteredJudgments.length)} of {filteredJudgments.length} judgments
+              {searchTerm && ` matching "${searchTerm}"`}
             </div>
           </div>
 
+
           {/* Judgments List */}
           <div className="space-y-4">
-            {isLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-8 h-8 animate-spin text-blue-600 mr-3" />
-                <span className="text-gray-600">Loading judgments...</span>
+            {filteredJudgments.length === 0 ? (
+              <div className="text-center py-12">
+                <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No judgments found</h3>
+                <p className="text-gray-500">
+                  {searchTerm ? 'Try adjusting your search terms' : 'No judgments available'}
+                </p>
               </div>
-            ) : filteredJudgments.length > 0 ? (
-              filteredJudgments.map((judgment) => {
+            ) : (
+              currentJudgments.map((judgment) => {
                 const metadata = extractMetadata(judgment);
                 return (
-                  <div key={judgment.id} className="bg-white rounded-2xl shadow-lg border border-gray-100 hover:shadow-xl hover:border-slate-300 transition-all duration-300 group overflow-hidden">
-                    {/* Header Section */}
-                    <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-6 py-5 border-b border-slate-700">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-4">
-                          <div className="w-14 h-14 bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl flex items-center justify-center shadow-lg">
-                            <FileText className="w-7 h-7 text-white" />
+                  <div key={judgment.id} className="bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <h3 className="text-lg font-semibold text-gray-900">
+                            {judgment.case_title || 'Untitled Case'}
+                          </h3>
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            {metadata.case_number || 'No Case Number'}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center space-x-6 text-sm text-gray-600 mb-4">
+                          <div className="flex items-center space-x-1">
+                            <Users className="h-4 w-4" />
+                            <span>{metadata.party1} vs {metadata.party2}</span>
                           </div>
-                          <div>
-                            <h3 className="text-white font-bold text-xl group-hover:text-amber-100 transition-colors">
-                              {metadata.party1} vs {metadata.party2}
-                            </h3>
-                            <div className="flex items-center space-x-4 mt-2">
-                              <div className="flex items-center text-slate-300 text-sm">
-                                <Calendar className="w-4 h-4 mr-2" />
-                                {formatDate(metadata.judgment_date)}
-                              </div>
-                              <div className="flex items-center text-slate-300 text-sm">
-                                <FileText className="w-4 h-4 mr-2" />
-                                {metadata.case_number}
-                              </div>
-                              <div className="flex items-center text-slate-300 text-sm">
-                                <Users className="w-4 h-4 mr-2" />
-                                {metadata.court}
-                              </div>
-                            </div>
+                          <div className="flex items-center space-x-1">
+                            <Calendar className="h-4 w-4" />
+                            <span>{formatDate(judgment.judgment_date || '')}</span>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <Clock className="h-4 w-4" />
+                            <span>{metadata.court}</span>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <FileText className="h-4 w-4" />
+                            <span>{judgment.file_size ? `${(judgment.file_size / 1024).toFixed(1)} KB` : 'Unknown size'}</span>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-slate-300 text-sm mb-1">Case ID: {judgment.id}</div>
+
+                        {/* Processing Status Indicator */}
+                        <div className="mb-4">
                           {judgment.is_processed ? (
-                            <div className="flex items-center space-x-1 bg-emerald-500/20 px-3 py-1 rounded-full border border-emerald-500/30">
-                              <CheckCircle className="w-3 h-3 text-emerald-300" />
-                              <span className="text-xs text-emerald-300 font-medium">Processed</span>
+                            <div className="flex items-center space-x-2">
+                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                              <span className="text-green-700 text-sm font-medium">
+                                ✅ Successfully Processed ({judgment.extraction_status || 'completed'})
+                              </span>
                             </div>
                           ) : (
-                            <div className="flex items-center space-x-1 bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30">
-                              <Clock className="w-3 h-3 text-amber-300" />
-                              <span className="text-xs text-amber-300 font-medium">Processing</span>
+                            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                              <div className="flex items-center">
+                                <div className="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
+                                <span className="text-red-700 text-sm font-medium">
+                                  ❌ Processing Failed: {judgment.extraction_status === 'failed' ? judgment.error || 'Could not process file' : 'File not processed'}
+                                </span>
+                              </div>
                             </div>
                           )}
                         </div>
-                      </div>
-                    </div>
 
-                    {/* Content Section */}
-                    <div className="p-6">
-                      {/* Case Details Grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-4 border border-gray-200">
-                          <div className="flex items-center space-x-2 mb-2">
-                            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                            <span className="font-semibold text-gray-700 text-sm">Case Title</span>
-                          </div>
-                          <div className="text-gray-600 text-sm">{judgment.case_title || 'Not available'}</div>
-                        </div>
-                        
-                        {judgment.summary && (
-                          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200">
-                            <div className="flex items-center space-x-2 mb-2">
-                              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                              <span className="font-semibold text-blue-700 text-sm">Summary</span>
-                            </div>
-                            <div className="text-blue-600 text-sm line-clamp-2">{judgment.summary}</div>
-                          </div>
-                        )}
-                      </div>
 
-                      {/* Action Buttons - Professional Horizontal Layout */}
-                      <div className="border-t border-gray-100 pt-5">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm text-gray-500 font-medium">Available Actions</div>
-                          <div className="flex items-center space-x-3">
-                            {/* Primary Actions */}
-                            <button
-                              onClick={() => handleViewJudgment(judgment)}
-                              className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm hover:shadow-md"
-                            >
-                              <Eye className="w-4 h-4 mr-2" />
-                              <span className="text-sm font-medium">View PDF</span>
-                            </button>
-                            
-                            <button
-                              onClick={() => handleViewText(judgment)}
-                              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-sm hover:shadow-md"
-                            >
-                              <FileText className="w-4 h-4 mr-2" />
-                              <span className="text-sm font-medium">Text</span>
-                            </button>
-                            
-                            <button
-                              onClick={() => handleViewTimeline(judgment)}
-                              className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors shadow-sm hover:shadow-md"
-                            >
-                              <Clock className="w-4 h-4 mr-2" />
-                              <span className="text-sm font-medium">Timeline</span>
-                            </button>
-                            
-                            <button
-                              onClick={() => handleSummarizeCase(judgment)}
-                              className="flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-sm hover:shadow-md"
-                            >
-                              <Brain className="w-4 h-4 mr-2" />
-                              <span className="text-sm font-medium">AI Summary</span>
-                            </button>
-                            
-                            <button
-                              onClick={() => handleDownloadJudgment(judgment)}
-                              className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors shadow-sm hover:shadow-md"
-                            >
-                              <Download className="w-4 h-4 mr-2" />
-                              <span className="text-sm font-medium">Download</span>
-                            </button>
-                          </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleViewText(judgment)}
+                            disabled={!judgment.is_processed}
+                            className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              !judgment.is_processed
+                                ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-50'
+                                : 'text-blue-700 bg-blue-100 hover:bg-blue-200'
+                            }`}
+                          >
+                            <FileText className="h-4 w-4 mr-1" />
+                            Text
+                          </button>
+                          
+                          <button
+                            onClick={() => handleViewTimeline(judgment)}
+                            disabled={!judgment.is_processed}
+                            className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              !judgment.is_processed
+                                ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-50'
+                                : 'text-green-700 bg-green-100 hover:bg-green-200'
+                            }`}
+                          >
+                            <Clock className="h-4 w-4 mr-1" />
+                            Timeline
+                          </button>
+                          
+                          <button
+                            onClick={() => handleViewJudgment(judgment)}
+                            disabled={!judgment.is_processed}
+                            className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              !judgment.is_processed
+                                ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-50'
+                                : 'text-purple-700 bg-purple-100 hover:bg-purple-200'
+                            }`}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            View
+                          </button>
+                          
+                          <button
+                            onClick={() => handleDownloadJudgment(judgment)}
+                            disabled={!judgment.is_processed}
+                            className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              !judgment.is_processed
+                                ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-50'
+                                : 'text-gray-700 bg-gray-100 hover:bg-gray-200'
+                            }`}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            Download
+                          </button>
+                          
+                          <button
+                            onClick={() => handleSummarizeCase(judgment)}
+                            disabled={isGeneratingSummary === judgment.id || !judgment.is_processed}
+                            className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              isGeneratingSummary === judgment.id
+                                ? 'text-white bg-blue-500 opacity-75 cursor-not-allowed'
+                                : !judgment.is_processed
+                                ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-50'
+                                : 'text-orange-700 bg-orange-100 hover:bg-orange-200'
+                            }`}
+                          >
+                            {isGeneratingSummary === judgment.id ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1"></div>
+                                Generating...
+                              </>
+                            ) : (
+                              <>
+                                <Brain className="h-4 w-4 mr-1" />
+                                AI Summary
+                              </>
+                            )}
+                          </button>
                         </div>
                       </div>
                     </div>
                   </div>
                 );
               })
-            ) : (
-              <div className="text-center py-12">
-                <div className="w-24 h-24 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <BookOpen className="w-12 h-12 text-gray-400" />
-                </div>
-                <h3 className="text-lg font-semibold text-gray-600 mb-2">No judgments found</h3>
-                <p className="text-gray-500">
-                  {searchQuery || dateFilter || courtFilter 
-                    ? 'Try adjusting your search criteria' 
-                    : 'No judgments have been uploaded yet'
-                  }
-                </p>
-              </div>
             )}
           </div>
+
+          {/* Pagination Controls */}
+          {filteredJudgments.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm border p-6 mt-6">
+              <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+                {/* Items per page selector */}
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <span>Show:</span>
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => handleItemsPerPageChange(parseInt(e.target.value))}
+                    className="px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value={10}>10</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                  <span>items per page</span>
+                </div>
+
+                {/* Page navigation */}
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handlePageChange(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    
+                    <div className="flex gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum;
+                        if (totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+                        
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => handlePageChange(pageNum)}
+                            className={`px-3 py-2 border rounded-lg transition-colors ${
+                              pageNum === currentPage
+                                ? 'bg-blue-500 text-white border-blue-500'
+                                : 'border-gray-300 hover:bg-gray-50'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    
+                    <button
+                      onClick={() => handlePageChange(currentPage + 1)}
+                      disabled={currentPage === totalPages}
+                      className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+
+                {/* Page info */}
+                <div className="text-sm text-gray-600">
+                  Page {currentPage} of {totalPages}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>

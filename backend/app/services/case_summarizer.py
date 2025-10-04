@@ -18,8 +18,22 @@ class CaseSummarizer:
     """Service for generating structured case summaries using OpenAI"""
     
     def __init__(self):
-        # Initialize OpenAI client
-        self.client = openai.OpenAI(api_key="your-openai-api-key")  # Will be updated from environment
+        # Initialize OpenAI client with error handling
+        try:
+            api_key = os.getenv('OPENAI_API_KEY')
+            if api_key:
+                try:
+                    self.client = openai.OpenAI(api_key=api_key)
+                    logger.info("✅ CaseSummarizer OpenAI client initialized successfully")
+                except Exception as client_error:
+                    self.client = None
+                    logger.error(f"❌ CaseSummarizer OpenAI client initialization failed: {client_error}")
+            else:
+                self.client = None
+                logger.warning("⚠️ OpenAI API key not found. Case summarizer will use fallback responses.")
+        except Exception as e:
+            self.client = None
+            logger.error(f"⚠️ OpenAI client initialization failed in CaseSummarizer: {e}. Using fallback responses.")
         # Create cache directory
         self.cache_dir = Path("case_summaries_cache")
         self.cache_dir.mkdir(exist_ok=True)
@@ -90,22 +104,46 @@ class CaseSummarizer:
             prompt = self._create_summarization_prompt(case_text, case_title)
             
             # Call OpenAI API
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a legal expert specializing in Indian Supreme Court judgments. Provide detailed, accurate analysis of legal cases with proper citations and legal terminology."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a legal expert specializing in Indian Supreme Court judgments. Provide detailed, accurate analysis of legal cases with proper citations and legal terminology."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    max_tokens=4000,
+                    temperature=0.3,  # Lower temperature for more consistent, factual output
+                    top_p=0.9
+                )
+            except Exception as api_error:
+                error_msg = str(api_error)
+                if 'insufficient_quota' in error_msg or 'quota' in error_msg.lower():
+                    # Return a fallback response for quota exceeded
+                    return {
+                        "success": True,
+                        "summary": {
+                            "facts": "AI service quota exceeded. Please try again later or contact support.",
+                            "issues": "Unable to analyze legal issues at this time.",
+                            "petitioner_arguments": "AI service temporarily unavailable.",
+                            "respondent_arguments": "AI service temporarily unavailable.",
+                            "court_reasoning": "AI service temporarily unavailable.",
+                            "decision": "AI service temporarily unavailable.",
+                            "citations": ["AI service quota exceeded - please try again later"]
+                        },
+                        "model_used": "fallback",
+                        "tokens_used": 0,
+                        "generated_at": datetime.now().isoformat(),
+                        "from_cache": False,
+                        "quota_exceeded": True
                     }
-                ],
-                max_tokens=4000,
-                temperature=0.3,  # Lower temperature for more consistent, factual output
-                top_p=0.9
-            )
+                else:
+                    raise api_error
             
             # Parse the response
             summary_text = response.choices[0].message.content
@@ -132,9 +170,15 @@ class CaseSummarizer:
             
         except Exception as e:
             logger.error(f"Error generating case summary: {str(e)}")
+            error_msg = str(e)
+            
+            # Handle specific OpenAI quota error
+            if 'insufficient_quota' in error_msg or 'quota' in error_msg.lower():
+                error_msg = "AI service quota exceeded. Please try again later."
+            
             return {
                 "success": False,
-                "error": str(e),
+                "error": error_msg,
                 "case_title": case_title,
                 "filename": filename,
                 "generated_at": datetime.now().isoformat(),

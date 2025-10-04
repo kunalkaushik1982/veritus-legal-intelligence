@@ -133,8 +133,199 @@ class OperationalTransform:
             else:
                 return op1, op2
         
+        elif op1.type == OperationType.INSERT and op2.type == OperationType.INSERT:
+            # Two concurrent insertions
+            if op1.position <= op2.position:
+                # op1 comes before op2, adjust op2's position
+                return op1, Operation(
+                    id=op2.id,
+                    type=op2.type,
+                    position=op2.position + len(op1.content),
+                    content=op2.content,
+                    length=op2.length,
+                    user_id=op2.user_id,
+                    username=op2.username,
+                    timestamp=op2.timestamp,
+                    version=op2.version
+                )
+            else:
+                # op2 comes before op1, adjust op1's position
+                return Operation(
+                    id=op1.id,
+                    type=op1.type,
+                    position=op1.position + len(op2.content),
+                    content=op1.content,
+                    length=op1.length,
+                    user_id=op1.user_id,
+                    username=op1.username,
+                    timestamp=op1.timestamp,
+                    version=op1.version
+                ), op2
+        
+        elif op1.type == OperationType.DELETE and op2.type == OperationType.DELETE:
+            # Two concurrent deletions
+            if op1.position <= op2.position:
+                if op1.position + op1.length <= op2.position:
+                    # Non-overlapping deletions, adjust op2's position
+                    return op1, Operation(
+                        id=op2.id,
+                        type=op2.type,
+                        position=op2.position - op1.length,
+                        content=op2.content,
+                        length=op2.length,
+                        user_id=op2.user_id,
+                        username=op2.username,
+                        timestamp=op2.timestamp,
+                        version=op2.version
+                    )
+                else:
+                    # Overlapping deletions, merge them
+                    new_length = max(op1.position + op1.length, op2.position + op2.length) - op1.position
+                    return Operation(
+                        id=op1.id,
+                        type=op1.type,
+                        position=op1.position,
+                        content="",
+                        length=new_length,
+                        user_id=op1.user_id,
+                        username=op1.username,
+                        timestamp=op1.timestamp,
+                        version=op1.version
+                    ), Operation(
+                        id=op2.id,
+                        type=OperationType.RETAIN,
+                        position=0,
+                        content="",
+                        length=0,
+                        user_id=op2.user_id,
+                        username=op2.username,
+                        timestamp=op2.timestamp,
+                        version=op2.version
+                    )
+            else:
+                # op2 comes before op1
+                if op2.position + op2.length <= op1.position:
+                    # Non-overlapping deletions, adjust op1's position
+                    return Operation(
+                        id=op1.id,
+                        type=op1.type,
+                        position=op1.position - op2.length,
+                        content=op1.content,
+                        length=op1.length,
+                        user_id=op1.user_id,
+                        username=op1.username,
+                        timestamp=op1.timestamp,
+                        version=op1.version
+                    ), op2
+                else:
+                    # Overlapping deletions, merge them
+                    new_length = max(op1.position + op1.length, op2.position + op2.length) - op2.position
+                    return Operation(
+                        id=op1.id,
+                        type=OperationType.RETAIN,
+                        position=0,
+                        content="",
+                        length=0,
+                        user_id=op1.user_id,
+                        username=op1.username,
+                        timestamp=op1.timestamp,
+                        version=op1.version
+                    ), Operation(
+                        id=op2.id,
+                        type=op2.type,
+                        position=op2.position,
+                        content="",
+                        length=new_length,
+                        user_id=op2.user_id,
+                        username=op2.username,
+                        timestamp=op2.timestamp,
+                        version=op2.version
+                    )
+        
+        elif op1.type == OperationType.INSERT and op2.type == OperationType.DELETE:
+            if op1.position <= op2.position:
+                # Insert comes before delete, adjust delete position
+                return op1, Operation(
+                    id=op2.id,
+                    type=op2.type,
+                    position=op2.position + len(op1.content),
+                    content=op2.content,
+                    length=op2.length,
+                    user_id=op2.user_id,
+                    username=op2.username,
+                    timestamp=op2.timestamp,
+                    version=op2.version
+                )
+            elif op1.position >= op2.position + op2.length:
+                # Insert comes after delete, adjust insert position
+                return Operation(
+                    id=op1.id,
+                    type=op1.type,
+                    position=op1.position - op2.length,
+                    content=op1.content,
+                    length=op1.length,
+                    user_id=op1.user_id,
+                    username=op1.username,
+                    timestamp=op1.timestamp,
+                    version=op1.version
+                ), op2
+            else:
+                # Insert is within delete range, insert at delete position
+                return Operation(
+                    id=op1.id,
+                    type=op1.type,
+                    position=op2.position,
+                    content=op1.content,
+                    length=op1.length,
+                    user_id=op1.user_id,
+                    username=op1.username,
+                    timestamp=op1.timestamp,
+                    version=op1.version
+                ), op2
+        
+        elif op1.type == OperationType.DELETE and op2.type == OperationType.INSERT:
+            if op2.position <= op1.position:
+                # Insert comes before delete, adjust delete position
+                return Operation(
+                    id=op1.id,
+                    type=op1.type,
+                    position=op1.position + len(op2.content),
+                    content=op1.content,
+                    length=op1.length,
+                    user_id=op1.user_id,
+                    username=op1.username,
+                    timestamp=op1.timestamp,
+                    version=op1.version
+                ), op2
+            elif op2.position >= op1.position + op1.length:
+                # Insert comes after delete, adjust insert position
+                return op1, Operation(
+                    id=op2.id,
+                    type=op2.type,
+                    position=op2.position - op1.length,
+                    content=op2.content,
+                    length=op2.length,
+                    user_id=op2.user_id,
+                    username=op2.username,
+                    timestamp=op2.timestamp,
+                    version=op2.version
+                )
+            else:
+                # Insert is within delete range, insert at delete position
+                return op1, Operation(
+                    id=op2.id,
+                    type=op2.type,
+                    position=op1.position,
+                    content=op2.content,
+                    length=op2.length,
+                    user_id=op2.user_id,
+                    username=op2.username,
+                    timestamp=op2.timestamp,
+                    version=op2.version
+                )
+        
         else:
-            # Handle other combinations
+            # Handle other combinations or fallback
             return op1, op2
     
     @staticmethod

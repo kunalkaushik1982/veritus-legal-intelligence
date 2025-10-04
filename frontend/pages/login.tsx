@@ -5,6 +5,7 @@ import { useMutation } from 'react-query';
 import { Eye, EyeOff, Mail, Lock, Scale } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import API_CONFIG from '../utils/config';
 
 interface LoginFormData {
   username: string;
@@ -21,7 +22,7 @@ export default function Login() {
 
   const loginMutation = useMutation(
     async (data: LoginFormData) => {
-      const response = await fetch('http://localhost:8000/api/auth/login', {
+      const response = await fetch(API_CONFIG.getApiUrl('/api/auth/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
