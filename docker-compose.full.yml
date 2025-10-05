@@ -1,0 +1,194 @@
+# Veritus - Complete Container Setup
+# This file contains all services and images for the Veritus application
+
+version: '3.8'
+
+services:
+  # Database Service
+  postgres:
+    image: postgres:15
+    container_name: veritus-postgres
+    environment:
+      POSTGRES_DB: veritus
+      POSTGRES_USER: veritus_user
+      POSTGRES_PASSWORD: veritus_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veritus_user -d veritus"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - veritus-network
+
+  # Cache Service
+  redis:
+    image: redis:7-alpine
+    container_name: veritus-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - veritus-network
+
+  # Backend API Service
+  backend:
+    image: veritus-backend:latest
+    container_name: veritus-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://veritus_user:veritus_password@postgres:5432/veritus
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=True
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+      - OPENAI_API_KEY=your_openai_api_key_here
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./pdfs:/app/pdfs
+      - ./logs:/app/logs
+    command: uvicorn app.simple_main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - veritus-network
+
+  # Frontend Web Service
+  frontend:
+    image: veritus-frontend:latest
+    container_name: veritus-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      - NODE_ENV=development
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - veritus-network
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: veritus-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    networks:
+      - veritus-network
+    profiles:
+      - production
+
+  # Database Admin (Optional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: veritus-pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@veritus.com
+      - PGADMIN_DEFAULT_PASSWORD=admin123
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
+    networks:
+      - veritus-network
+    profiles:
+      - admin
+
+  # Redis Admin (Optional)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: veritus-redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - veritus-network
+    profiles:
+      - admin
+
+  # File Watcher for Development (Optional)
+  file-watcher:
+    image: alpine:latest
+    container_name: veritus-file-watcher
+    volumes:
+      - ./backend:/watch/backend
+      - ./frontend:/watch/frontend
+    command: sh -c "apk add --no-cache inotify-tools && while true; do inotifywait -r -e modify,create,delete /watch && echo 'Files changed at $(date)'; done"
+    restart: unless-stopped
+    networks:
+      - veritus-network
+    profiles:
+      - development
+
+# Named Volumes
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+# Custom Network
+networks:
+  veritus-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
