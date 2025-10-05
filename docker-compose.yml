@@ -38,7 +38,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - DEBUG=True
       - CORS_ORIGINS=http://localhost:3000
-      - OPENAI_API_KEY=your_openai_api_key_here
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
